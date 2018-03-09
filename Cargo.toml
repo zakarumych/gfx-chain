@@ -2,6 +2,13 @@
 name = "gfx-chain"
 version = "0.1.0"
 authors = ["omni-viral <scareaangel@gmail.com>"]
+description = "Synchronize access to GPU resource as if it is an easy task"
+keywords = ["graphics", "vulkan", "gfx-hal"]
+
+repository = "https://github.com/omni-viral/chains.git"
+
+readme = "README.md"
+license = "MIT/Apache-2.0"
 
 [dependencies]
 derivative = "1.0"

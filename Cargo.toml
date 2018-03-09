@@ -1,0 +1,9 @@
+[package]
+name = "gfx-chain"
+version = "0.1.0"
+authors = ["omni-viral <scareaangel@gmail.com>"]
+
+[dependencies]
+derivative = "1.0"
+gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "506ba0af0" }
+log = "0.4"

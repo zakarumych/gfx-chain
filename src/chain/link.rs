@@ -9,9 +9,9 @@ use resource::{Access, Layout, Resource};
 use queue::QueueId;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Acquire;
+pub struct Acquire;
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Release;
+pub struct Release;
 
 pub(super) trait Semantics {
     fn src_dst(this: QueueFamilyId, other: QueueFamilyId) -> (QueueFamilyId, QueueFamilyId);
@@ -29,8 +29,9 @@ impl Semantics for Release {
     }
 }
 
+/// Synchronization required for the link.
 #[derive(Clone, Debug)]
-pub(super) enum LinkSync<A, L, S, M> {
+pub enum LinkSync<A, L, S, M> {
     /// No transition required.
     None(M),
 
@@ -95,12 +96,7 @@ impl<A, L, S> LinkSync<A, L, S, Release> {
     }
 }
 
-impl<A, L, S, M> LinkSync<A, L, S, M>
-where
-    A: Access,
-    L: Layout,
-    M: Semantics,
-{
+impl<A, L, S, M> LinkSync<A, L, S, M> {
     /// Insert barrier if required before recording commands for the link.
     pub(super) fn barrier<R, C>(
         &self,
@@ -108,6 +104,9 @@ where
         commands: &mut CommandBuffer<R::Backend, C>,
         resources: Option<&[(&R, R::Range)]>,
     ) where
+        A: Access,
+        L: Layout,
+        M: Semantics,
         C: Supports<Transfer>,
         R: Resource<Access = A, Layout = L>,
     {
@@ -119,8 +118,7 @@ where
                 ref access,
                 ref layout,
                 ref stages,
-            } => (access, layout, stages, (this.family(), this.family())),
-            LinkSync::BarrierSemaphore {
+            } | LinkSync::BarrierSemaphore {
                 ref access,
                 ref layout,
                 ref stages,
@@ -180,9 +178,6 @@ pub struct Link<A, L, S, W> {
     pub(super) stages: PipelineStage,
     pub(super) access: A,
     pub(super) layout: L,
-    pub(super) merged_access: A,
-    pub(super) merged_layout: L,
-    pub(super) merged_stages: PipelineStage,
     pub(super) acquire: LinkSync<A, L, W, Acquire>,
     pub(super) release: LinkSync<A, L, S, Release>,
 }
@@ -192,6 +187,38 @@ where
     A: Access,
     L: Layout,
 {
+    /// Get acquire synchronization info
+    pub fn acquire(&self) -> &LinkSync<A, L, W, Acquire> {
+        &self.acquire
+    }
+
+    /// Get release synchronization info
+    pub fn release(&self) -> &LinkSync<A, L, S, Release> {
+        &self.release
+    }
+
+    /// Get acquire synchronization info
+    pub fn take_acquire(&mut self) -> LinkSync<A, L, W, Acquire> {
+        use std::mem::replace;
+        replace(&mut self.acquire, LinkSync::None(Acquire))
+    }
+
+    /// Get release synchronization info
+    pub fn take_release(&mut self) -> LinkSync<A, L, S, Release> {
+        use std::mem::replace;
+        replace(&mut self.release, LinkSync::None(Release))
+    }
+
+    /// Get acquire synchronization info
+    pub fn set_acquire(&mut self, sync: LinkSync<A, L, W, Acquire>) {
+        self.acquire = sync;
+    }
+
+    /// Get release synchronization info
+    pub fn set_release(&mut self, sync: LinkSync<A, L, S, Release>) {
+        self.release = sync;
+    }
+
     /// Get allowed access type for the link.
     pub fn access(&self) -> A {
         self.access
@@ -202,8 +229,13 @@ where
         self.layout
     }
 
+    /// Get stages at which resource is accessed.
+    pub fn stages(&self) -> PipelineStage {
+        self.stages
+    }
+
     /// Record acquire barrier if required.
-    pub fn acquire<R, C>(
+    pub fn record_acquire<R, C>(
         &self,
         commands: &mut CommandBuffer<R::Backend, C>,
         resources: Option<&[(&R, R::Range)]>,
@@ -215,7 +247,7 @@ where
     }
 
     /// Record release barrier if required.
-    pub fn release<R, C>(
+    pub fn record_release<R, C>(
         &self,
         commands: &mut CommandBuffer<R::Backend, C>,
         resources: Option<&[(&R, R::Range)]>,

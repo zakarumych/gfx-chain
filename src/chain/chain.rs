@@ -30,7 +30,7 @@ impl<T> ChainId<T> {
 /// All resources in set are expected to be used only in ways specified by this chain.
 /// Each link of the chain corresponds to some render-pass or similar entity.
 #[derive(Clone, Debug)]
-pub struct Chain<A, L, U, S, W> {
+pub struct Chain<A, L, U, S, W = S> {
     usage: U,
     links: Vec<Option<Link<A, L, S, W>>>,
 }
@@ -62,9 +62,6 @@ where
                     access: link.access,
                     layout: link.layout,
                     stages: link.stages,
-                    merged_access: link.access,
-                    merged_layout: link.layout,
-                    merged_stages: link.stages,
                     acquire: LinkSync::None(Acquire),
                     release: LinkSync::None(Release),
                 }
@@ -94,16 +91,16 @@ where
                 .next()
             {
                 let compatible = !link.access.is_write() && !next.access.is_write();
-                let merged_access = link.access | next.access;
-                let merged_stages = link.stages | next.stages;
+                let access = link.access | next.access;
+                let stages = link.stages | next.stages;
                 match link.layout.merge(next.layout) {
-                    Some(merged_layout) if compatible && link.queue == next.queue => {
-                        link.merged_layout = merged_layout;
-                        next.merged_layout = merged_layout;
-                        link.merged_access = merged_access;
-                        next.merged_access = merged_access;
-                        link.merged_stages = merged_stages;
-                        next.merged_stages = merged_stages;
+                    Some(layout) if compatible && link.queue == next.queue => {
+                        link.layout = layout;
+                        next.layout = layout;
+                        link.access = access;
+                        next.access = access;
+                        link.stages = stages;
+                        next.stages = stages;
                     }
                     _ => {}
                 }
@@ -136,17 +133,17 @@ where
                 let compatible = !link.access.is_write() && !next.access.is_write();
 
                 let src_layout = if next.access.is_read() {
-                    link.merged_layout
+                    link.layout
                 } else {
-                    link.merged_layout.discard_content()
+                    link.layout.discard_content()
                 };
-                let dst_layout = next.merged_layout;
+                let dst_layout = next.layout;
 
-                let src_access = link.merged_access;
-                let dst_access = next.merged_access;
+                let src_access = link.access;
+                let dst_access = next.access;
 
-                let src_stages = link.merged_stages;
-                let dst_stages = link.merged_stages;
+                let src_stages = link.stages;
+                let dst_stages = link.stages;
 
                 match link.layout.merge(next.layout) {
                     Some(_) if compatible && link.queue == next.queue => {
@@ -173,14 +170,14 @@ where
                             link.release = LinkSync::Semaphore { semaphore: signal };
                             next.acquire = LinkSync::Semaphore { semaphore: wait };
                         } else {
-                            // Perform layout transition before signaling semaphore.
-                            link.release = LinkSync::BarrierSemaphore {
-                                semaphore: signal,
-                                access: src_access..A::none(),
-                                layout: src_layout..dst_layout,
-                                stages: src_stages..dst_stages,
+                            // Perform layout transition after waiting for semaphore.
+                            link.release = LinkSync::Semaphore { semaphore: signal };
+                            next.acquire = LinkSync::BarrierSemaphore {
+                                semaphore: wait,
+                                access: A::none() .. dst_access,
+                                layout: src_layout .. dst_layout,
+                                stages: PipelineStage::empty() .. dst_stages,
                             };
-                            next.acquire = LinkSync::Semaphore { semaphore: wait };
                         }
                     }
                     _ => {
@@ -220,6 +217,16 @@ where
 }
 
 impl<A, L, U, S, W> Chain<A, L, U, S, W> {
+    /// Get number of links in chain.
+    pub fn len(&self) -> usize {
+        self.links.len()
+    }
+
+    /// Get reference to links.
+    pub fn links(&self) -> &[Option<Link<A, L, S, W>>] {
+        &self.links
+    }
+
     /// Get reference to link by index.
     ///
     /// # Panics
@@ -241,37 +248,48 @@ impl<A, L, U, S, W> Chain<A, L, U, S, W> {
     }
 
     /// Get reference to first link before specified index.
-    pub fn prev(&self, index: usize) -> Option<&Link<A, L, S, W>> {
-        self.links[..index]
-            .iter()
+    pub fn prev(&self, index: usize) -> Option<usize> {
+        let (before, _) = self.links.split_at(index);
+        before.iter().enumerate()
             .rev()
-            .filter_map(Option::as_ref)
-            .next()
+            .filter(|&(_, l)| l.is_some())
+            .next().map(|(i, _)| i)
     }
 
-    /// Get mutable reference to first link before specified index.
-    pub fn prev_mut(&mut self, index: usize) -> Option<&mut Link<A, L, S, W>> {
-        self.links[..index]
-            .iter_mut()
+    /// Get reference to first link before specified index.
+    /// Links at the end treated as before index 0.
+    pub fn prev_wrapping(&self, index: usize) -> Option<usize> {
+        let (before, link_after) = self.links.split_at(index);
+        let after = link_after.split_first().map(|(_, after)| after).unwrap_or(&[]);
+        before.iter().enumerate()
             .rev()
-            .filter_map(Option::as_mut)
-            .next()
+            .chain(after.iter().enumerate().rev().map(|(i, l)| (i + index + 1, l)))
+            .filter(|&(_, l)| l.is_some())
+            .next().map(|(i, _)| i)
     }
 
-    /// Get reference to first link after specified index.
-    pub fn next(&self, index: usize) -> Option<&Link<A, L, S, W>> {
-        self.links[index + 1..]
+    /// Get reference to first link not before specified index.
+    pub fn next(&self, index: usize) -> Option<usize> {
+        let (_, link_after) = self.links.split_at(index);
+        let after = link_after.split_first().map(|(_, after)| after).unwrap_or(&[]);
+        after
             .iter()
-            .filter_map(Option::as_ref)
-            .next()
+            .enumerate().map(|(i, l)| (i + index + 1, l))
+            .filter(|&(_, l)| l.is_some())
+            .next().map(|(i, _)| i)
     }
 
-    /// Get mutable reference after specified index.
-    pub fn next_mut(&mut self, index: usize) -> Option<&mut Link<A, L, S, W>> {
-        self.links[index + 1..]
-            .iter_mut()
-            .filter_map(Option::as_mut)
-            .next()
+    /// Get reference to first link _not_ _before_ specified index.
+    /// Links at the beginning treated as after last index.
+    pub fn next_wrapping(&self, index: usize) -> Option<usize> {
+        let (before, link_after) = self.links.split_at(index);
+        let after = link_after.split_first().map(|(_, after)| after).unwrap_or(&[]);
+        after
+            .iter()
+            .enumerate().map(|(i, l)| (i + index + 1, l))
+            .chain(before.iter().enumerate())
+            .filter(|&(_, l)| l.is_some())
+            .next().map(|(i, _)| i)
     }
 
     /// Get reference to first link.
@@ -279,21 +297,8 @@ impl<A, L, U, S, W> Chain<A, L, U, S, W> {
     /// # Panics
     ///
     /// This function will panic if no link exists.
-    pub fn first(&self) -> &Link<A, L, S, W> {
-        self.links.iter().filter_map(Option::as_ref).next().unwrap()
-    }
-
-    /// Get mutable reference to first link.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if no link exists.
-    pub fn first_mut(&mut self) -> &mut Link<A, L, S, W> {
-        self.links
-            .iter_mut()
-            .filter_map(Option::as_mut)
-            .next()
-            .unwrap()
+    pub fn first(&self) -> usize {
+        self.links.iter().enumerate().filter(|&(_, l)| l.is_some()).next().unwrap().0
     }
 
     /// Get reference to last link.
@@ -301,27 +306,14 @@ impl<A, L, U, S, W> Chain<A, L, U, S, W> {
     /// # Panics
     ///
     /// This function will panic if no link exists.
-    pub fn last(&self) -> &Link<A, L, S, W> {
+    pub fn last(&self) -> usize {
         self.links
             .iter()
+            .enumerate()
             .rev()
-            .filter_map(Option::as_ref)
+            .filter(|&(_, l)| l.is_some())
             .next()
-            .unwrap()
-    }
-
-    /// Get mutable reference to last link.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if no link exists.
-    pub fn last_mut(&mut self) -> &mut Link<A, L, S, W> {
-        self.links
-            .iter_mut()
-            .rev()
-            .filter_map(Option::as_mut)
-            .next()
-            .unwrap()
+            .unwrap().0
     }
 
     /// Get combination of all usage types for the resource

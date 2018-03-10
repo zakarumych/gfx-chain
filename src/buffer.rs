@@ -2,6 +2,7 @@
 use hal::buffer::{Access as BufferAccess, Usage as BufferUsage};
 use hal::pso::PipelineStage;
 
+use chain::{Chain, ChainSet};
 use resource::{Access, Layout, Usage};
 
 impl Access for BufferAccess {
@@ -60,3 +61,9 @@ impl Usage for BufferUsage {
         BufferUsage::all()
     }
 }
+
+/// Alias for `Chain` specialized fo buffers.
+pub type BufferChain<S, W = S> = Chain<BufferAccess, BufferLayout, BufferUsage, S, W>;
+
+/// Alias for `ChainSet` specialized fo buffers.
+pub type BufferChainSet<S, W = S> = ChainSet<BufferAccess, BufferLayout, BufferUsage, S, W>;

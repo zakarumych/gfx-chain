@@ -9,7 +9,7 @@
 //!    To do so a pair of macros are provided.
 //!
 //! 2. Make all passes declare their `PassLinks`.
-//! 3. Build `ResourceChains` from all `PassLinks`.
+//! 3. Build `ResourceChainSet` from all `PassLinks`.
 //! 
 
 #![deny(missing_docs)]
@@ -103,7 +103,8 @@ mod image;
 mod queue;
 mod resource;
 
-pub use buffer::BufferLayout;
-pub use chain::{ChainId, Link, PassLink, PassLinks, ResourceChain, ResourceChains};
+pub use buffer::{BufferLayout, BufferChain, BufferChainSet};
+pub use chain::{ChainId, Link, PassLink, PassLinks, Chain, ChainSet};
+pub use image::{ImageChain, ImageChainSet};
 pub use queue::QueueId;
 pub use resource::{Access, Layout, Resource, Usage};

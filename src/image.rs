@@ -1,6 +1,7 @@
 use hal::image::{Access as ImageAccess, ImageLayout, Usage as ImageUsage};
 use hal::pso::PipelineStage;
 
+use chain::{Chain, ChainSet};
 use resource::{Access, Layout, Usage};
 
 impl Access for ImageAccess {
@@ -73,3 +74,9 @@ impl Usage for ImageUsage {
         ImageUsage::all()
     }
 }
+
+/// Alias for `Chain` specialized fo images.
+pub type ImageChain<S, W = S> = Chain<ImageAccess, ImageLayout, ImageUsage, S, W>;
+
+/// Alias for `ChainSet` specialized fo images.
+pub type ImageChainSet<S, W = S> = ChainSet<ImageAccess, ImageLayout, ImageUsage, S, W>;

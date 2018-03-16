@@ -60,7 +60,7 @@ impl Layout for ImageLayout {
         }
     }
 
-    fn discard_content(self) -> Self {
+    fn discard_content() -> Self {
         ImageLayout::Undefined
     }
 }

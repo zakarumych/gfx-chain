@@ -1,4 +1,3 @@
-
 use hal::buffer::{Access as BufferAccess, Usage as BufferUsage};
 use hal::pso::PipelineStage;
 
@@ -8,9 +7,11 @@ impl Access for BufferAccess {
     fn none() -> Self {
         Self::empty()
     }
+
     fn all() -> Self {
         Self::all()
     }
+
     fn is_write(&self) -> bool {
         self.contains(Self::TRANSFER_WRITE) || self.contains(Self::SHADER_WRITE)
             || self.contains(Self::HOST_WRITE) || self.contains(Self::MEMORY_WRITE)
@@ -49,6 +50,10 @@ pub struct BufferLayout;
 impl Layout for BufferLayout {
     fn merge(self, _other: BufferLayout) -> Option<BufferLayout> {
         Some(BufferLayout)
+    }
+
+    fn discard_content() -> Self {
+        BufferLayout
     }
 }
 

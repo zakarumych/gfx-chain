@@ -9,7 +9,5 @@ pub trait Layout: Debug + Copy + Eq + Sized {
     /// Get relaxed source layout for transition.
     /// Content may be discarded during transition from the relaxed layout.
     /// Not all layout types have dedicated value for this.
-    fn discard_content(self) -> Self {
-        self
-    }
+    fn discard_content() -> Self;
 }

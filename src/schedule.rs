@@ -49,21 +49,19 @@ where
         // E.g. All dependencies are enqueued.
         enqueued.sort();
         // Among ready passes find best fit.
-        let ((fitness, qid), index) = passes
+        let (fitness, qid, index) = passes
             .iter()
             .enumerate()
             .filter(|&(_, &(_, ref pass))| all_there(pass.dependencies(), &enqueued))
             .map(|(index, &(_, ref pass))| {
-                (
-                    fitness(
-                        pass,
-                        max_queues(pass.family()),
-                        &mut images,
-                        &mut buffers,
-                        &families,
-                    ),
-                    index,
-                )
+                let (fitness, qid) = fitness(
+                    pass,
+                    max_queues(pass.family()),
+                    &mut images,
+                    &mut buffers,
+                    &families,
+                );
+                (fitness, qid, index)
             })
             .min()
             .unwrap();
@@ -74,7 +72,7 @@ where
             index,
             pass,
             qid,
-            fitness,
+            fitness.wait_factor,
             &mut families,
             &mut images,
             &mut buffers,
@@ -173,96 +171,134 @@ fn schedule_pass(
     pid: PassId,
     pass: PassDesc,
     qid: QueueId,
-    fitness: Fitness,
+    wait_factor: usize,
     families: &mut Families,
     images: &mut ImageChains,
     buffers: &mut BufferChains,
 ) {
     assert_eq!(qid.family(), pass.family());
 
-    let sid = {
-        let ref mut queue = families.ensure_queue(qid);
-        queue.add_submit(Submit::new(fitness.wait_factor, pid))
-    };
-
     for (&id, &state) in pass.buffers() {
         let chain = buffers.entry(id).or_insert_with(|| Chain::default());
-        append_links(chain, id, sid, state, families);
+        setup_transfer(id, chain, qid, state, families);
     }
 
     for (&id, &state) in pass.images() {
         let chain = images.entry(id).or_insert_with(|| Chain::default());
-        append_links(chain, id, sid, state, families);
+        setup_transfer(id, chain, qid, state, families);
+    }
+
+    let ref mut queue = families.ensure_queue(qid);
+    let sid = queue.add_submit(Submit::new(wait_factor, pid));
+    let ref mut submit = queue[sid];
+
+    for (&id, &state) in pass.buffers() {
+        let chain = buffers.entry(id).or_insert_with(|| Chain::default());
+        add_to_chain(id, chain, sid, submit, state);
+    }
+
+    for (&id, &state) in pass.images() {
+        let chain = images.entry(id).or_insert_with(|| Chain::default());
+        add_to_chain(id, chain, sid, submit, state);
     }
 }
 
-fn append_links<R>(
-    chain: &mut Chain<R>,
+fn setup_transfer<R>(
     id: Id<R>,
-    sid: SubmitId,
+    chain: &mut Chain<R>,
+    qid: QueueId,
     state: State<R>,
     families: &mut Families,
 ) where
     R: Resource,
     Submit: SubmitInsertLink<R>,
 {
-    let (last_link_index, next_link_index, after_next_link_index) = {
-        let chain_len = chain.links().len();
-        (chain_len - 1, chain_len, chain_len + 1)
-    };
-
+    let release_link_index = chain.links().len();
+    let acquire_link_index = release_link_index + 1;
     let append = match chain.last_link_mut() {
-        Some(ref mut link) if link.family() != sid.family() => {
+        Some(ref mut link) if link.family() != qid.family() => {
             // Different queue families.
-            if !link.make_single_queue() {
-                // Last link can't release because it is multi-queue.
 
-                // Pick queue.
-                let later_sid = link.tails()
-                    .into_iter()
-                    .max_by_key(|&sid| families[sid].wait_factor)
-                    .unwrap();
-                let queue_state = link.queue_state(later_sid.queue());
+            // Pick queue.
+            let (mut wait_factor, later_sid) = link.tails()
+                .into_iter()
+                .map(|sid| (families[sid].wait_factor, sid))
+                .max()
+                .unwrap();
+            let queue_state = link.queue_state(later_sid.queue());
 
-                // Push submit for release.
-                let release_sid = {
-                    let ref mut queue = families[later_sid.queue()];
-                    let wait_factor = queue[later_sid].wait_factor;
-                    queue.add_submit(Submit::empty(wait_factor))
-                };
+            // Push submit for release.
+            let release_sid = {
+                let ref mut queue = families[later_sid.queue()];
+                if queue.get_submit(later_sid).unwrap().is_transfer() {
+                    later_sid
+                } else {
+                    wait_factor += 1;
+                    let mut submit = Submit::new_transfer(wait_factor);
+                    submit.insert_link(id, release_link_index);
+                    queue.add_submit(submit)
+                }
+            };
 
-                // Release link.
-                let release_link = Link::new_single_queue(queue_state, release_sid);
+            // Push submit for acquire.
+            let acquire_sid = {
+                let queue = families.ensure_queue(qid);
+                if queue
+                    .last_submit()
+                    .map_or(false, |submit| submit.is_transfer())
+                {
+                    SubmitId::new(qid, queue.len() - 1)
+                } else {
+                    wait_factor += 1;
+                    let mut submit = Submit::new_transfer(wait_factor);
+                    submit.insert_link(id, acquire_link_index);
+                    queue.add_submit(submit)
+                }
+            };
 
-                // Acquire link.
-                let acquire_link = Link::new_single_queue(state, sid);
+            // Release link.
+            let release_link = Link::new_release(queue_state, release_sid);
 
-                // Insert release link to release submit
-                families[release_sid].insert_link(id, next_link_index);
+            // Acquire link.
+            let acquire_link = Link::new_acquire(state, acquire_sid);
 
-                // Insert acquire link to target submit
-                families[sid].insert_link(id, after_next_link_index);
-                vec![release_link, acquire_link]
-            } else {
-                families[sid].insert_link(id, next_link_index);
-                let acquire_link = Link::new_single_queue(state, sid);
-                vec![acquire_link]
-            }
+            vec![release_link, acquire_link]
         }
-        Some(ref mut link) if link.compatible(state, sid) => {
-            // Compatible with last link.
-            families[sid].insert_link(id, last_link_index);
-            link.push(state, sid);
-            vec![]
-        }
-        _ => {
-            // Incompatible on same family or no links.
-            families[sid].insert_link(id, next_link_index);
-            vec![Link::new(state, sid)]
-        }
+        _ => vec![],
     };
 
     for link in append {
+        chain.add_link(link);
+    }
+}
+
+fn add_to_chain<R>(
+    id: Id<R>,
+    chain: &mut Chain<R>,
+    sid: SubmitId,
+    submit: &mut Submit,
+    state: State<R>,
+) where
+    R: Resource,
+    Submit: SubmitInsertLink<R>,
+{
+    let chain_len = chain.links().len();
+    let append = match chain.last_link_mut() {
+        Some(ref mut link) if link.family() != sid.family() => {
+            panic!("Must be covered by `setup_transfer` function");
+        }
+        Some(ref mut link) if link.compatible(state, sid) => {
+            submit.insert_link(id, chain_len - 1);
+            link.insert_submit(state, sid);
+            None
+        }
+        Some(_) | None => {
+            submit.insert_link(id, chain_len);
+            Some(Link::new(state, sid))
+        }
+    };
+
+    if let Some(link) = append {
         chain.add_link(link);
     }
 }

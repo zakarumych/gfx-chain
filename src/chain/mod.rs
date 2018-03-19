@@ -1,3 +1,10 @@
+//!
+//!
+//! This module defines types to reason about what resources referenced in what submissions.
+//! How commands from those submissions access resources.
+//! This information allows to derive synchronization required.
+//!
+
 mod link;
 
 use std::collections::HashMap;
@@ -6,6 +13,8 @@ use resource::{Buffer, Id, Image, Resource};
 
 pub use self::link::Link;
 
+/// This type corresponds to resource category.
+/// All resources from the same category must be accessed as permitted by links of the chain.
 #[derive(Clone, Debug)]
 pub struct Chain<R: Resource> {
     links: Vec<Link<R>>,

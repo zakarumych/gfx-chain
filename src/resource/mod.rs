@@ -1,3 +1,8 @@
+//!
+//! This module provides `Resource` trait and a pair of implementations: `Buffer` and `Image`.
+//! `Resource` trait together with `Access`, `Layout` and `Usage` allows user to deal with resource states more generically.
+//!
+
 mod access;
 mod buffer;
 mod image;
@@ -33,6 +38,8 @@ pub trait Resource: Copy + Debug + Eq + Ord + Hash {
     type Range: Clone;
 }
 
+/// Buffer resource.
+/// Implements `Resource` with associated types required for buffers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Buffer {}
 impl Resource for Buffer {
@@ -42,6 +49,8 @@ impl Resource for Buffer {
     type Range = Range<u64>;
 }
 
+/// Image resource.
+/// Implements `Resource` with associated types required for images.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Image {}
 impl Resource for Image {
@@ -55,10 +64,16 @@ impl Resource for Image {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id<R>(usize, PhantomData<R>);
 
+/// State of the resource.
 #[derive(Clone, Copy, Debug)]
 pub struct State<R: Resource> {
+    /// Access types for the resource.
     pub access: R::Access,
+
+    /// Current layout of the resource.
     pub layout: R::Layout,
+
+    /// Stages at which resource is accessed.
     pub stages: PipelineStage,
 }
 

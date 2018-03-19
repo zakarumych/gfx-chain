@@ -1,5 +1,4 @@
-use std::collections::hash_map::{Entry, HashMap, Iter as HashMapIter};
-use std::option::IntoIter as OptionIter;
+use std::collections::hash_map::{Entry, HashMap};
 use std::ops::Range;
 
 use hal::pso::PipelineStage;
@@ -10,16 +9,9 @@ use families::{QueueId, SubmitId};
 
 #[derive(Clone, Debug)]
 pub struct LinkQueueState<R: Resource> {
-    pub(crate) access: R::Access,
-    pub(crate) stages: PipelineStage,
-    pub(crate) submits: Range<usize>,
-}
-
-#[derive(Clone, Debug)]
-enum LinkQueues<R: Resource> {
-    Passes(HashMap<usize, LinkQueueState<R>>),
-    Acquire { queue: usize, submit: usize },
-    Release { queue: usize, submit: usize },
+    pub(super) access: R::Access,
+    pub(super) stages: PipelineStage,
+    pub(super) submits: Range<usize>,
 }
 
 /// This type defines what states resource are at some point in time when commands recorded into
@@ -28,357 +20,143 @@ enum LinkQueues<R: Resource> {
 /// Performing actions with access types not declared by the link is prohibited.
 #[derive(Clone, Debug)]
 pub struct Link<R: Resource> {
-    state: State<R>,
-    queues: LinkQueues<R>,
-    family: QueueFamilyId,
+    pub(super) state: State<R>,
+    pub(super) queues: HashMap<usize, LinkQueueState<R>>,
+    pub(super) family: QueueFamilyId,
 }
 
 impl<R> Link<R>
 where
     R: Resource,
 {
-    /// Create new link
+    /// Create new link with first attached submit.
+    ///
+    /// # Parameters
+    ///
+    /// `state`     - state of the first submit.
+    /// `sid`       - id of the first submit.
+    ///
     pub fn new(state: State<R>, sid: SubmitId) -> Self {
         use std::iter::once;
         Link {
             state,
-            queues: LinkQueues::Passes(
-                once((
-                    sid.queue().index(),
-                    LinkQueueState {
-                        access: state.access,
-                        stages: state.stages,
-                        submits: sid.index()..sid.index() + 1,
-                    },
-                )).collect(),
-            ),
+            queues: once((
+                sid.queue().index(),
+                LinkQueueState {
+                    access: state.access,
+                    stages: state.stages,
+                    submits: sid.index()..sid.index() + 1,
+                },
+            )).collect(),
             family: sid.family(),
         }
     }
 
-    /// Create new link
-    pub fn new_acquire(state: State<R>, sid: SubmitId) -> Self {
-        Link {
-            state,
-            queues: LinkQueues::Acquire {
-                queue: sid.queue().index(),
-                submit: sid.index(),
-            },
-            family: sid.family(),
-        }
-    }
-
-    /// Create new link
-    pub fn new_release(state: State<R>, sid: SubmitId) -> Self {
-        Link {
-            state,
-            queues: LinkQueues::Release {
-                queue: sid.queue().index(),
-                submit: sid.index(),
-            },
-            family: sid.family(),
-        }
-    }
-
-    /// Get family that owns the resource at the link.
+    /// Get queue family that owns the resource at the link.
+    /// All associated submits must be from the same queue family.
     pub fn family(&self) -> QueueFamilyId {
         self.family
     }
 
-    /// Get total state of the resource
+    /// Get total state of the resource.
+    /// Total state is combination of all access types
+    /// performed by the associated submits,
+    /// all stages at which resource is accessed
+    /// and layout that supports all operations performed by all submits.
     pub fn total_state(&self) -> State<R> {
         self.state
     }
 
-    /// Get queue state
+    /// Get queue state.
+    /// This state contains only access types and stages
+    /// for submits from specified queue.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if this link has no associated
+    /// submits from specified queue.
+    ///
     pub fn queue_state(&self, qid: QueueId) -> State<R> {
         assert_eq!(self.family, qid.family());
-        match self.queues {
-            LinkQueues::Acquire { queue, .. } | LinkQueues::Release { queue, .. } => {
-                assert_eq!(queue, qid.index());
-                self.state
-            }
-            LinkQueues::Passes(ref map) => {
-                let queue = map.get(&qid.index()).unwrap();
-                assert_eq!(self.state.access, self.state.access | queue.access);
-                assert_eq!(self.state.stages, self.state.stages | queue.stages);
-                State {
-                    access: queue.access,
-                    stages: queue.stages,
-                    layout: self.state.layout,
-                }
-            }
+        let queue = self.queues.get(&qid.index()).unwrap();
+        assert_eq!(self.state.access, self.state.access | queue.access);
+        assert_eq!(self.state.stages, self.state.stages | queue.stages);
+        State {
+            access: queue.access,
+            stages: queue.stages,
+            layout: self.state.layout,
         }
+    }
+
+    /// Check if the link is associated only with specified submit.
+    ///
+    /// # Panic
+    ///
+    /// The function will panic if link doesn't associated with specified submit.
+    ///
+    pub fn exclusive(&self, sid: SubmitId) -> bool {
+        assert_eq!(self.family, sid.family());
+        let range = self.queues[&sid.queue().index()].submits.clone();
+        assert!(range.start <= sid.index() && range.end > sid.index());
+        range.start + 1 == range.end
     }
 
     /// Check of the given states and submit are compatible with link.
+    /// If those are compatible then this submit can be associated with the link.
     pub fn compatible(&self, state: State<R>, sid: SubmitId) -> bool {
         // If queue the same and states are compatible.
         // And there is no later submit on the queue.
-        self.family == sid.family() && self.state.compatible(state) && match self.queues {
-            LinkQueues::Passes(ref map) => map.get(&sid.queue().index())
-                .map_or(true, |state| state.submits.end == sid.index()),
-            _ => false,
-        }
+        self.family == sid.family() && self.state.compatible(state)
+            && self.queues
+                .get(&sid.queue().index())
+                .map_or(true, |state| state.submits.end == sid.index())
     }
 
-    /// Push submit with specified state to the link.
+    /// Insert submit with specified state to the link.
     /// It must be compatible.
+    /// Associating submit with the link will allow the submit
+    /// to be executed in parallel with other submits associated with this link.
+    /// Unless other chains disallow.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if `state` and `sid` are not compatible.
+    /// E.g. `Link::compatible` didn't returned `true` for the arguments.
+    ///
     pub fn insert_submit(&mut self, state: State<R>, sid: SubmitId) {
         assert_eq!(self.family, sid.family());
         let state = self.state.merge(state);
-        match self.queues {
-            LinkQueues::Passes(ref mut map) => match map.entry(sid.queue().index()) {
-                Entry::Occupied(mut occupied) => {
-                    assert_eq!(occupied.get_mut().submits.end, sid.index());
-                    occupied.get_mut().access |= state.access;
-                    occupied.get_mut().stages |= state.stages;
-                    occupied.get_mut().submits.end = sid.index() + 1;
-                }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(LinkQueueState {
-                        access: state.access,
-                        stages: state.stages,
-                        submits: sid.index()..sid.index() + 1,
-                    });
-                }
-            },
-            _ => panic!("Inserting submits into acquire and release links isn't allowed"),
-        }
+        match self.queues.entry(sid.queue().index()) {
+            Entry::Occupied(mut occupied) => {
+                assert_eq!(occupied.get_mut().submits.end, sid.index());
+                occupied.get_mut().access |= state.access;
+                occupied.get_mut().stages |= state.stages;
+                occupied.get_mut().submits.end = sid.index() + 1;
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(LinkQueueState {
+                    access: state.access,
+                    stages: state.stages,
+                    submits: sid.index()..sid.index() + 1,
+                });
+            }
+        };
         self.state = state;
     }
 
-    /// Collect tails of submits from all queues.
+    /// Collect last submits from all queues.
     /// Can be used to calculate wait-factor before inserting new submit.
     pub fn tails(&self) -> Vec<SubmitId> {
-        match self.queues {
-            LinkQueues::Passes(ref map) => map.iter()
-                .map(|(&index, queue)| {
-                    SubmitId::new(QueueId::new(self.family, index), queue.submits.end - 1)
-                })
-                .collect(),
-            LinkQueues::Acquire { queue, submit } | LinkQueues::Release { queue, submit } => {
-                vec![SubmitId::new(QueueId::new(self.family, queue), submit)]
-            }
-        }
+        self.queues
+            .iter()
+            .map(|(&index, queue)| {
+                SubmitId::new(QueueId::new(self.family, index), queue.submits.end - 1)
+            })
+            .collect()
     }
 
-    /// Check if ownership transfer is required
+    /// Check if ownership transfer is required between those links.
     pub fn transfer(&self, next: &Self) -> bool {
         self.family != next.family
     }
-
-    /// Get all semaphores required to synchronize those links.
-    pub fn semaphores(&self, next: &Self) -> Vec<Semaphore> {
-        assert!(self.state.exclusive() || next.state.exclusive());
-        match (&self.queues, &next.queues) {
-            (&LinkQueues::Passes(ref left), &LinkQueues::Passes(ref right)) => {
-                assert_eq!(self.family, next.family);
-                assert!(left.len() == 1 || right.len() == 1);
-                left.iter()
-                    .flat_map(|(&lqid, lqueue)| {
-                        let lsid =
-                            SubmitId::new(QueueId::new(self.family, lqid), lqueue.submits.end - 1);
-                        right.iter().filter_map(move |(&rqid, rqueue)| {
-                            let rsid = SubmitId::new(
-                                QueueId::new(next.family, rqid),
-                                rqueue.submits.start,
-                            );
-                            if lqid != rqid {
-                                Some(Semaphore {
-                                    submits: lsid..rsid,
-                                    stages: lqueue.stages..rqueue.stages,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect()
-            }
-            (
-                &LinkQueues::Passes(ref left),
-                &LinkQueues::Release {
-                    queue: rqid,
-                    submit: rsid,
-                },
-            ) => {
-                assert_eq!(self.family, next.family);
-                let rsid = SubmitId::new(QueueId::new(next.family, rqid), rsid);
-                left.iter()
-                    .filter_map(|(&lqid, lqueue)| {
-                        let lsid =
-                            SubmitId::new(QueueId::new(self.family, lqid), lqueue.submits.end - 1);
-                        if lqid != rqid {
-                            Some(Semaphore {
-                                submits: lsid..rsid,
-                                stages: lqueue.stages..next.state.stages,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
-            (
-                &LinkQueues::Acquire {
-                    queue: lqid,
-                    submit: lsid,
-                },
-                &LinkQueues::Passes(ref right),
-            ) => {
-                assert_eq!(self.family, next.family);
-                let lsid = SubmitId::new(QueueId::new(self.family, lqid), lsid);
-                right
-                    .iter()
-                    .filter_map(|(&rqid, rqueue)| {
-                        let rsid =
-                            SubmitId::new(QueueId::new(next.family, rqid), rqueue.submits.start);
-                        if lqid != rqid {
-                            Some(Semaphore {
-                                submits: lsid..rsid,
-                                stages: self.state.stages..rqueue.stages,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
-            (
-                &LinkQueues::Release {
-                    queue: lqid,
-                    submit: lsid,
-                },
-                &LinkQueues::Acquire {
-                    queue: rqid,
-                    submit: rsid,
-                },
-            ) => {
-                assert_ne!(self.family, next.family);
-                let lsid = SubmitId::new(QueueId::new(self.family, lqid), lsid);
-                let rsid = SubmitId::new(QueueId::new(next.family, rqid), rsid);
-                vec![
-                    Semaphore {
-                        submits: lsid..rsid,
-                        stages: self.state.stages..next.state.stages,
-                    },
-                ]
-            }
-            _ => panic!("Invalid chain"),
-        }
-    }
-
-    /// Get all barriers required to synchronize those links.
-    pub fn barriers(&self, next: &Self) -> Vec<Barrier<R>> {
-        match (&self.queues, &next.queues) {
-            (&LinkQueues::Passes(ref left), &LinkQueues::Passes(ref right)) => left.iter()
-                .flat_map(|(&lqid, lqueue)| {
-                    let lsid = SubmitId::new(QueueId::new(self.family, lqid), lqueue.submits.start);
-                    right.iter().flat_map(move |(&rqid, rqueue)| {
-                        let rsid =
-                            SubmitId::new(QueueId::new(next.family, rqid), rqueue.submits.start);
-                        if lsid.queue() == rsid.queue() {
-                            Some(Barrier {
-                                submits: lsid..rsid,
-                                accesses: lqueue.access..rqueue.access,
-                                layouts: self.state.layout..next.state.layout,
-                                stages: lqueue.stages..rqueue.stages,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect(),
-            (
-                &LinkQueues::Passes(ref left),
-                &LinkQueues::Release {
-                    queue: rqid,
-                    submit: rsid,
-                },
-            ) => {
-                assert_eq!(self.family, next.family);
-                let rsid = SubmitId::new(QueueId::new(next.family, rqid), rsid);
-                left.iter()
-                    .filter_map(|(&lqid, lqueue)| {
-                        let lsid =
-                            SubmitId::new(QueueId::new(self.family, lqid), lqueue.submits.end - 1);
-                        if lqid == rqid {
-                            Some(Barrier {
-                                submits: lsid..rsid,
-                                accesses: lqueue.access..next.state.access,
-                                layouts: self.state.layout..next.state.layout,
-                                stages: lqueue.stages..next.state.stages,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
-            (
-                &LinkQueues::Acquire {
-                    queue: lqid,
-                    submit: lsid,
-                },
-                &LinkQueues::Passes(ref right),
-            ) => {
-                assert_eq!(self.family, next.family);
-                let lsid = SubmitId::new(QueueId::new(self.family, lqid), lsid);
-                right
-                    .iter()
-                    .filter_map(|(&rqid, rqueue)| {
-                        let rsid =
-                            SubmitId::new(QueueId::new(next.family, rqid), rqueue.submits.start);
-                        if lqid == rqid {
-                            Some(Barrier {
-                                submits: lsid..rsid,
-                                accesses: self.state.access..next.state.access,
-                                layouts: self.state.layout..next.state.layout,
-                                stages: self.state.stages..rqueue.stages,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
-            (
-                &LinkQueues::Release {
-                    queue: lqid,
-                    submit: lsid,
-                },
-                &LinkQueues::Acquire {
-                    queue: rqid,
-                    submit: rsid,
-                },
-            ) => {
-                assert_ne!(self.family, next.family);
-                let lsid = SubmitId::new(QueueId::new(self.family, lqid), lsid);
-                let rsid = SubmitId::new(QueueId::new(next.family, rqid), rsid);
-
-                let barrier = Barrier {
-                    submits: lsid..rsid,
-                    accesses: self.state.access..next.state.access,
-                    layouts: self.state.layout..next.state.layout,
-                    stages: self.state.stages..next.state.stages,
-                };
-                vec![barrier]
-            }
-            _ => panic!("Invalid chain"),
-        }
-    }
-}
-
-pub struct Semaphore {
-    pub submits: Range<SubmitId>,
-    pub stages: Range<PipelineStage>,
-}
-
-pub struct Barrier<R: Resource> {
-    pub submits: Range<SubmitId>,
-    pub accesses: Range<R::Access>,
-    pub layouts: Range<R::Layout>,
-    pub stages: Range<PipelineStage>,
 }

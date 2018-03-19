@@ -44,7 +44,7 @@ pub struct Submit {
     pub(crate) signal: Vec<(SubmitId, PipelineStage)>,
     pub(crate) buffers: HashMap<Id<Buffer>, usize>,
     pub(crate) images: HashMap<Id<Image>, usize>,
-    pub(crate) pass: Option<PassId>,
+    pub(crate) pass: PassId,
     pub(crate) wait_factor: usize,
 }
 
@@ -56,43 +56,8 @@ impl Submit {
             signal: Vec::new(),
             buffers: HashMap::new(),
             images: HashMap::new(),
-            pass: Some(pass),
+            pass,
             wait_factor,
         }
-    }
-
-    /// Create new submit with no pass.
-    /// This submit will acquire or release resources.
-    pub fn new_transfer(wait_factor: usize) -> Self {
-        Submit {
-            wait: Vec::new(),
-            signal: Vec::new(),
-            buffers: HashMap::new(),
-            images: HashMap::new(),
-            pass: None,
-            wait_factor,
-        }
-    }
-
-    /// Check if this submit is of transfer type
-    pub fn is_transfer(&self) -> bool {
-        self.pass.is_none()
-    }
-}
-
-pub trait SubmitInsertLink<R> {
-    /// Insert new link into submit.
-    fn insert_link(&mut self, id: Id<R>, index: usize);
-}
-
-impl SubmitInsertLink<Buffer> for Submit {
-    fn insert_link(&mut self, id: Id<Buffer>, index: usize) {
-        self.buffers.insert(id, index);
-    }
-}
-
-impl SubmitInsertLink<Image> for Submit {
-    fn insert_link(&mut self, id: Id<Image>, index: usize) {
-        self.images.insert(id, index);
     }
 }

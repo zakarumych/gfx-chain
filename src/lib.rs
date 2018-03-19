@@ -5,7 +5,7 @@
 //! before and after each pass.
 //!
 
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 #![deny(unused_must_use)]
 #![deny(dead_code)]
 

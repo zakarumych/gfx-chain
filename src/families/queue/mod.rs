@@ -4,7 +4,7 @@ use std::ops::{Index, IndexMut};
 
 use hal::queue::QueueFamilyId;
 
-pub use self::submit::{Submit, SubmitId, SubmitInsertLink};
+pub use self::submit::{Submit, SubmitId};
 
 /// Queue id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -33,6 +33,8 @@ impl QueueId {
     }
 }
 
+/// Instances of this type contains array of `Submit`s.
+/// Those submits are expected to be submitted in order.
 #[derive(Clone, Debug)]
 pub struct Queue {
     id: QueueId,

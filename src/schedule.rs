@@ -1,3 +1,9 @@
+//!
+//! This module provides scheduling feature.
+//! User can manually fill `Schedule` structure.
+//! `Schedule` can be filled automatically by `schedule` function.
+//! 
+
 use std::cmp::max;
 use hal::queue::QueueFamilyId;
 
@@ -8,9 +14,16 @@ use resource::{Resource, State};
 use resource::Id;
 use families::{Families, QueueId, Submit, SubmitId, SubmitInsertLink};
 
+
+/// Result of pass scheduler.
 pub struct Schedule {
+    /// Contains submits for passes spread among queue families.
     pub families: Families,
+
+    /// Contains all buffer chains.
     pub buffers: BufferChains,
+
+    /// Contains all image chains.
     pub images: ImageChains,
 }
 
@@ -20,6 +33,8 @@ struct Fitness {
     wait_factor: usize,
 }
 
+/// Calculate automatic `Schedule` for passes.
+/// This function tries to find most appropriate schedule for passes execution.
 pub fn schedule<F, Q>(passes: Vec<PassDesc>, max_queues: Q) -> Schedule
 where
     Q: Fn(QueueFamilyId) -> usize,
@@ -155,12 +170,8 @@ where
     if let Some(link) = chain.links().last() {
         transfers += if link.transfer(&fake_link) { 1 } else { 0 };
 
-        for semaphore in link.semaphores(&fake_link) {
-            wait_factor = max(families[semaphore.submits.start].wait_factor, wait_factor);
-        }
-
-        for barrier in link.barriers(&fake_link) {
-            wait_factor = max(families[barrier.submits.start].wait_factor, wait_factor);
+        for tail in link.tails() {
+            wait_factor = max(families[tail].wait_factor, wait_factor);
         }
     }
 
@@ -178,16 +189,6 @@ fn schedule_pass(
 ) {
     assert_eq!(qid.family(), pass.family());
 
-    for (&id, &state) in pass.buffers() {
-        let chain = buffers.entry(id).or_insert_with(|| Chain::default());
-        setup_transfer(id, chain, qid, state, families);
-    }
-
-    for (&id, &state) in pass.images() {
-        let chain = images.entry(id).or_insert_with(|| Chain::default());
-        setup_transfer(id, chain, qid, state, families);
-    }
-
     let ref mut queue = families.ensure_queue(qid);
     let sid = queue.add_submit(Submit::new(wait_factor, pid));
     let ref mut submit = queue[sid];
@@ -203,75 +204,6 @@ fn schedule_pass(
     }
 }
 
-fn setup_transfer<R>(
-    id: Id<R>,
-    chain: &mut Chain<R>,
-    qid: QueueId,
-    state: State<R>,
-    families: &mut Families,
-) where
-    R: Resource,
-    Submit: SubmitInsertLink<R>,
-{
-    let release_link_index = chain.links().len();
-    let acquire_link_index = release_link_index + 1;
-    let append = match chain.last_link_mut() {
-        Some(ref mut link) if link.family() != qid.family() => {
-            // Different queue families.
-
-            // Pick queue.
-            let (mut wait_factor, later_sid) = link.tails()
-                .into_iter()
-                .map(|sid| (families[sid].wait_factor, sid))
-                .max()
-                .unwrap();
-            let queue_state = link.queue_state(later_sid.queue());
-
-            // Push submit for release.
-            let release_sid = {
-                let ref mut queue = families[later_sid.queue()];
-                if queue.get_submit(later_sid).unwrap().is_transfer() {
-                    later_sid
-                } else {
-                    wait_factor += 1;
-                    let mut submit = Submit::new_transfer(wait_factor);
-                    submit.insert_link(id, release_link_index);
-                    queue.add_submit(submit)
-                }
-            };
-
-            // Push submit for acquire.
-            let acquire_sid = {
-                let queue = families.ensure_queue(qid);
-                if queue
-                    .last_submit()
-                    .map_or(false, |submit| submit.is_transfer())
-                {
-                    SubmitId::new(qid, queue.len() - 1)
-                } else {
-                    wait_factor += 1;
-                    let mut submit = Submit::new_transfer(wait_factor);
-                    submit.insert_link(id, acquire_link_index);
-                    queue.add_submit(submit)
-                }
-            };
-
-            // Release link.
-            let release_link = Link::new_release(queue_state, release_sid);
-
-            // Acquire link.
-            let acquire_link = Link::new_acquire(state, acquire_sid);
-
-            vec![release_link, acquire_link]
-        }
-        _ => vec![],
-    };
-
-    for link in append {
-        chain.add_link(link);
-    }
-}
-
 fn add_to_chain<R>(
     id: Id<R>,
     chain: &mut Chain<R>,
@@ -284,9 +216,6 @@ fn add_to_chain<R>(
 {
     let chain_len = chain.links().len();
     let append = match chain.last_link_mut() {
-        Some(ref mut link) if link.family() != sid.family() => {
-            panic!("Must be covered by `setup_transfer` function");
-        }
         Some(ref mut link) if link.compatible(state, sid) => {
             submit.insert_link(id, chain_len - 1);
             link.insert_submit(state, sid);

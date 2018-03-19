@@ -60,5 +60,8 @@ where
     }
 }
 
+/// Type alias for map of chains by id for buffers.
 pub type BufferChains = HashMap<Id<Buffer>, Chain<Buffer>>;
+
+/// Type alias for map of chains by id for images.
 pub type ImageChains = HashMap<Id<Image>, Chain<Image>>;

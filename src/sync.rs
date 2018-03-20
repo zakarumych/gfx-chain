@@ -1,6 +1,6 @@
 //!
 //! This crates provide functions for find all required synchronizations (barriers and semaphores).
-//! 
+//!
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -17,7 +17,6 @@ use schedule::Schedule;
 fn earlier_stage(stages: PipelineStage) -> PipelineStage {
     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
 }
-
 
 /// Side of the submit. `Acquire` or `Release`.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq)]
@@ -43,10 +42,7 @@ pub struct Point {
 
 impl Point {
     fn new(sid: SubmitId, side: Side) -> Self {
-        Point {
-            sid,
-            side,
-        }
+        Point { sid, side }
     }
 }
 
@@ -364,9 +360,11 @@ fn sync_submit_chain<R>(
                 let prev_latest = latest(prev, families);
 
                 // Wait for release.
-                sync.acquire
-                    .wait
-                    .push(Wait::new(id, Point::new(prev_latest, Side::Release), this_state.stages));
+                sync.acquire.wait.push(Wait::new(
+                    id,
+                    Point::new(prev_latest, Side::Release),
+                    this_state.stages,
+                ));
 
                 // Acquire ownership.
                 sync.acquire.pick_mut().insert(
@@ -380,25 +378,30 @@ fn sync_submit_chain<R>(
 
                 // Signal to other queues in this link.
                 for (qid, queue) in this.queues().filter(|&(qid, _)| qid != sid.queue()) {
-                    sync.acquire
-                        .signal
-                        .push(Signal::new(id, Point::new(SubmitId::new(qid, queue.first()), Side::Acquire)));
+                    sync.acquire.signal.push(Signal::new(
+                        id,
+                        Point::new(SubmitId::new(qid, queue.first()), Side::Acquire),
+                    ));
                 }
             } else {
                 // This is not the earliest.
                 // Wait for earliest.
-                sync.acquire
-                    .wait
-                    .push(Wait::new(id, Point::new(this_earliest, Side::Acquire), this_state.stages));
+                sync.acquire.wait.push(Wait::new(
+                    id,
+                    Point::new(this_earliest, Side::Acquire),
+                    this_state.stages,
+                ));
             }
         } else {
             // Same family.
             for tail in prev.tails() {
                 if tail.queue() != sid.queue() {
                     // Wait for tails on other queues.
-                    sync.acquire
-                        .wait
-                        .push(Wait::new(id, Point::new(tail, Side::Release), this_state.stages));
+                    sync.acquire.wait.push(Wait::new(
+                        id,
+                        Point::new(tail, Side::Release),
+                        this_state.stages,
+                    ));
                 } else if !prev.exclusive() {
                     // Insert barrier here.
                     // Prev won't insert as it isn't exclusive.
@@ -445,18 +448,24 @@ fn sync_submit_chain<R>(
                 );
 
                 // Signal to acquire.
-                sync.release.signal.push(Signal::new(id, Point::new(next_earliest, Side::Acquire)));
+                sync.release
+                    .signal
+                    .push(Signal::new(id, Point::new(next_earliest, Side::Acquire)));
             } else {
                 // This is not the latest.
                 // Signal to latest.
-                sync.release.signal.push(Signal::new(id, Point::new(this_latest, Side::Release)));
+                sync.release
+                    .signal
+                    .push(Signal::new(id, Point::new(this_latest, Side::Release)));
             }
         } else {
             // Same family.
             for head in next.heads() {
                 if head.queue() != sid.queue() {
                     // Signal to heads on other queues.
-                    sync.release.signal.push(Signal::new(id, Point::new(head, Side::Acquire)));
+                    sync.release
+                        .signal
+                        .push(Signal::new(id, Point::new(head, Side::Acquire)));
                 } else if this.exclusive() {
                     // Insert barrier here.
                     // Next won't insert as this is exclusive.
@@ -526,12 +535,8 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync>) {
             .chain(
                 (0..sid.index())
                     .rev()
-                    .filter_map(|index| {
-                        let sid = SubmitId::new(sid.queue(), index);
-                        sync.get(&sid)
-                            .map(|sync| sync.release.wait.iter().chain(sync.acquire.wait.iter()))
-                    })
-                    .flat_map(|x| x),
+                    .filter_map(|index| sync.get(&SubmitId::new(sid.queue(), index)))
+                    .flat_map(|sync| sync.release.wait.iter().chain(sync.acquire.wait.iter())),
             )
             .any(|earlier| {
                 // If waits for non-earlier point.
@@ -546,7 +551,9 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync>) {
                 .signal;
             let index = signal
                 .iter()
-                .position(|signal| signal.point() == Point { sid, side } && signal.id() == wait.id())
+                .position(|signal| {
+                    signal.point() == Point { sid, side } && signal.id() == wait.id()
+                })
                 .unwrap();
             signal.remove(index);
         } else {

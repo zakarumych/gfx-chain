@@ -226,4 +226,14 @@ where
             .next()
             .map(|(&index, queue)| (QueueId::new(self.family, index), queue))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, R> ExactSizeIterator for QueuesIter<'a, R>
+where
+    R: Resource + 'a,
+{
 }

@@ -1,6 +1,6 @@
 mod submit;
 
-use std::iter::Enumerate;
+use std::iter::{DoubleEndedIterator, Enumerate, ExactSizeIterator};
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
@@ -35,6 +35,8 @@ impl QueueId {
     }
 }
 
+/// Iterator over references to submits in queue.
+#[derive(Debug, Clone)]
 pub struct Submits<'a> {
     qid: QueueId,
     iter: Enumerate<SliceIter<'a, Submit>>,
@@ -48,8 +50,24 @@ impl<'a> Iterator for Submits<'a> {
             .next()
             .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
 
+impl<'a> DoubleEndedIterator for Submits<'a> {
+    fn next_back(&mut self) -> Option<(SubmitId, &'a Submit)> {
+        self.iter
+            .next_back()
+            .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
+    }
+}
+
+impl<'a> ExactSizeIterator for Submits<'a> {}
+
+/// Iterator over mutable references to submits in queue.
+#[derive(Debug)]
 pub struct SubmitsMut<'a> {
     qid: QueueId,
     iter: Enumerate<SliceIterMut<'a, Submit>>,
@@ -63,7 +81,21 @@ impl<'a> Iterator for SubmitsMut<'a> {
             .next()
             .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
+
+impl<'a> DoubleEndedIterator for SubmitsMut<'a> {
+    fn next_back(&mut self) -> Option<(SubmitId, &'a mut Submit)> {
+        self.iter
+            .next_back()
+            .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
+    }
+}
+
+impl<'a> ExactSizeIterator for SubmitsMut<'a> {}
 
 /// Instances of this type contains array of `Submit`s.
 /// Those submits are expected to be submitted in order.

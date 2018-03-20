@@ -16,7 +16,7 @@ use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
 use hal::queue::QueueFamilyId;
 
-pub use self::queue::{Queue, QueueId, Submit, SubmitId};
+pub use self::queue::{Queue, QueueId, Submit, SubmitId, Submits, SubmitsMut};
 
 /// Instances of this type contains array of `Queue`s.
 /// All contained queues has identical capabilities.

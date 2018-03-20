@@ -1,5 +1,6 @@
-#![allow(missing_docs)]
-#![allow(dead_code)]
+//!
+//! This crates provide functions for find all required synchronizations (barriers and semaphores).
+//! 
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -9,7 +10,7 @@ use hal::pso::PipelineStage;
 
 use Pick;
 use chain::{BufferChains, Chain, ImageChains, Link};
-use families::{Families, QueueId, Submit, SubmitId, Submits};
+use families::{Families, QueueId, Submit, SubmitId};
 use resource::{Access, Buffer, Id, Image, Resource, State, Uid};
 use schedule::Schedule;
 
@@ -17,22 +18,36 @@ fn earlier_stage(stages: PipelineStage) -> PipelineStage {
     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
 }
 
-// fn stage_index(stage: PipelineStage) -> usize {
-//     let index = stage.bits().trailing_zeros();
-//     assert_eq!(1 << index, stage.bits(), "Only one stage must be set");
-//     index as usize
-// }
 
+/// Side of the submit. `Acquire` or `Release`.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Side {
+    /// Acquire side of the submit.
+    /// Synchronization commands from this side must be recorded before main commands of submit.
     Acquire,
+
+    /// Release side of the submit.
+    /// Synchronization commands from this side must be recorded after main commands of submit.
     Release,
 }
 
+/// Point in execution graph. Target submit and side.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Point {
-    sid: SubmitId,
-    side: Side,
+    /// Id of submit.
+    pub sid: SubmitId,
+
+    /// Side of the submit.
+    pub side: Side,
+}
+
+impl Point {
+    fn new(sid: SubmitId, side: Side) -> Self {
+        Point {
+            sid,
+            side,
+        }
+    }
 }
 
 impl PartialOrd<Self> for Point {
@@ -48,49 +63,42 @@ impl PartialOrd<Self> for Point {
     }
 }
 
-#[derive(Debug)]
+/// Semaphore signal info.
+/// There must be paired wait.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Signal {
     id: Uid,
     point: Point,
 }
 
 impl Signal {
-    fn acquire<R>(id: Id<R>, sid: SubmitId) -> Self
+    /// Create signaling for specified point.
+    /// At this point `Wait` must be created as well.
+    /// `id` and `point` combination must be unique.
+    fn new<R>(id: Id<R>, point: Point) -> Self
     where
         R: Resource,
     {
         Signal {
             id: id.into(),
-            point: Point {
-                sid,
-                side: Side::Acquire,
-            },
+            point,
         }
     }
 
-    fn release<R>(id: Id<R>, sid: SubmitId) -> Self
-    where
-        R: Resource,
-    {
-        Signal {
-            id: id.into(),
-            point: Point {
-                sid,
-                side: Side::Release,
-            },
-        }
-    }
-
-    fn id(&self) -> Uid {
+    /// Id of the signal.
+    pub fn id(&self) -> Uid {
         self.id
     }
 
-    fn point(&self) -> Point {
+    /// Point for which to signal.
+    pub fn point(&self) -> Point {
         self.point
     }
 }
 
-#[derive(Debug)]
+/// Semaphore wait info.
+/// There must be paired signal.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Wait {
     id: Uid,
     point: Point,
@@ -98,49 +106,42 @@ pub struct Wait {
 }
 
 impl Wait {
-    fn acquire<R>(id: Id<R>, sid: SubmitId, stages: PipelineStage) -> Self
+    /// Create waiting for specified point.
+    /// At this point `Signal` must be created as well.
+    /// `id` and `point` combination must be unique.
+    fn new<R>(id: Id<R>, point: Point, stages: PipelineStage) -> Self
     where
         R: Resource,
     {
         Wait {
             id: id.into(),
-            point: Point {
-                sid,
-                side: Side::Acquire,
-            },
+            point,
             stage: earlier_stage(stages),
         }
     }
 
-    fn release<R>(id: Id<R>, sid: SubmitId, stages: PipelineStage) -> Self
-    where
-        R: Resource,
-    {
-        Wait {
-            id: id.into(),
-            point: Point {
-                sid,
-                side: Side::Release,
-            },
-            stage: earlier_stage(stages),
-        }
-    }
-
-    fn id(&self) -> Uid {
+    /// Id of the wait.
+    pub fn id(&self) -> Uid {
         self.id
     }
 
-    fn point(&self) -> Point {
+    /// Point to wait for.
+    pub fn point(&self) -> Point {
         self.point
     }
 
-    fn stage(&self) -> PipelineStage {
+    /// Stage at which to wait.
+    pub fn stage(&self) -> PipelineStage {
         self.stage
     }
 }
 
+/// Pipeline barrier info.
 pub struct Barrier<R: Resource> {
+    /// `Some` queue for ownership transfer. Or `None`
     pub queues: Option<Range<QueueId>>,
+
+    /// Stage transition.
     pub states: Range<State<R>>,
 }
 
@@ -193,15 +194,28 @@ where
     }
 }
 
+/// Map of barriers by resource id.
 pub type Barriers<R: Resource> = HashMap<Id<R>, Barrier<R>>;
+
+/// Map of barriers by buffer id.
 pub type BufferBarriers = Barriers<Buffer>;
+
+/// Map of barriers by image id.
 pub type ImageBarriers = Barriers<Image>;
 
+/// Synchronization for submit at one side.
 pub struct Guard {
-    wait: Vec<Wait>,
-    buffers: BufferBarriers,
-    images: ImageBarriers,
-    signal: Vec<Signal>,
+    /// Points at other queues that must be waited before commands from the submit can be executed.
+    pub wait: Vec<Wait>,
+
+    /// Buffer pipeline barriers to be inserted before or after (depends on the side) main commands of the submit.
+    pub buffers: BufferBarriers,
+
+    /// Image pipeline barriers to be inserted before or after (depends on the side) main commands of the submit.
+    pub images: ImageBarriers,
+
+    /// Points at other queues that can run after barriers above.
+    pub signal: Vec<Signal>,
 }
 
 impl Guard {
@@ -237,8 +251,11 @@ impl Pick<Buffer> for Guard {
     }
 }
 
+/// Both sides of synchronization for submit.
 pub struct Sync {
+    /// Acquire side of submit synchronization.
     pub acquire: Guard,
+    /// Release side of submit synchronization.
     pub release: Guard,
 }
 
@@ -250,19 +267,38 @@ impl Sync {
         }
     }
 
-    fn get(&self, side: Side) -> &Guard {
+    /// Get reference to `Guard` by `Side`.
+    pub fn get(&self, side: Side) -> &Guard {
         match side {
             Side::Acquire => &self.acquire,
             Side::Release => &self.release,
         }
     }
 
-    fn get_mut(&mut self, side: Side) -> &mut Guard {
+    /// Get mutable reference to `Guard` by `Side`.
+    pub fn get_mut(&mut self, side: Side) -> &mut Guard {
         match side {
             Side::Acquire => &mut self.acquire,
             Side::Release => &mut self.release,
         }
     }
+}
+
+/// Find required synchronization for all submits in `Schedule`.
+pub fn sync(schedule: &Schedule) -> HashMap<SubmitId, Sync> {
+    let ref families = schedule.families;
+    let ref buffers = schedule.buffers;
+    let ref images = schedule.images;
+
+    let mut sync = families
+        .iter()
+        .flat_map(|family| family.iter())
+        .flat_map(|queue| queue.iter())
+        .map(|(sid, submit)| (sid, sync_submit(sid, submit, buffers, images, families)))
+        .collect();
+
+    optimize(families, &mut sync);
+    sync
 }
 
 fn latest<R>(link: &Link<R>, families: &Families) -> SubmitId
@@ -330,7 +366,7 @@ fn sync_submit_chain<R>(
                 // Wait for release.
                 sync.acquire
                     .wait
-                    .push(Wait::release(id, prev_latest, this_state.stages));
+                    .push(Wait::new(id, Point::new(prev_latest, Side::Release), this_state.stages));
 
                 // Acquire ownership.
                 sync.acquire.pick_mut().insert(
@@ -346,14 +382,14 @@ fn sync_submit_chain<R>(
                 for (qid, queue) in this.queues().filter(|&(qid, _)| qid != sid.queue()) {
                     sync.acquire
                         .signal
-                        .push(Signal::acquire(id, SubmitId::new(qid, queue.first())));
+                        .push(Signal::new(id, Point::new(SubmitId::new(qid, queue.first()), Side::Acquire)));
                 }
             } else {
                 // This is not the earliest.
                 // Wait for earliest.
                 sync.acquire
                     .wait
-                    .push(Wait::acquire(id, this_earliest, this_state.stages));
+                    .push(Wait::new(id, Point::new(this_earliest, Side::Acquire), this_state.stages));
             }
         } else {
             // Same family.
@@ -362,7 +398,7 @@ fn sync_submit_chain<R>(
                     // Wait for tails on other queues.
                     sync.acquire
                         .wait
-                        .push(Wait::release(id, tail, this_state.stages));
+                        .push(Wait::new(id, Point::new(tail, Side::Release), this_state.stages));
                 } else if !prev.exclusive() {
                     // Insert barrier here.
                     // Prev won't insert as it isn't exclusive.
@@ -387,9 +423,9 @@ fn sync_submit_chain<R>(
             if this_latest == sid {
                 // Wait for other queues in this link.
                 for (qid, queue) in this.queues().filter(|&(qid, _)| qid != sid.queue()) {
-                    sync.release.wait.push(Wait::release(
+                    sync.release.wait.push(Wait::new(
                         id,
-                        SubmitId::new(qid, queue.last()),
+                        Point::new(SubmitId::new(qid, queue.last()), Side::Release),
                         PipelineStage::TOP_OF_PIPE,
                     ));
                 }
@@ -409,18 +445,18 @@ fn sync_submit_chain<R>(
                 );
 
                 // Signal to acquire.
-                sync.release.signal.push(Signal::acquire(id, next_earliest));
+                sync.release.signal.push(Signal::new(id, Point::new(next_earliest, Side::Acquire)));
             } else {
                 // This is not the latest.
                 // Signal to latest.
-                sync.release.signal.push(Signal::release(id, this_latest));
+                sync.release.signal.push(Signal::new(id, Point::new(this_latest, Side::Release)));
             }
         } else {
             // Same family.
             for head in next.heads() {
                 if head.queue() != sid.queue() {
                     // Signal to heads on other queues.
-                    sync.release.signal.push(Signal::acquire(id, head));
+                    sync.release.signal.push(Signal::new(id, Point::new(head, Side::Acquire)));
                 } else if this.exclusive() {
                     // Insert barrier here.
                     // Next won't insert as this is exclusive.
@@ -453,20 +489,6 @@ fn sync_submit(
     }
 
     sync
-}
-
-/// Synchronize schedule.
-pub fn sync(schedule: &Schedule) -> HashMap<SubmitId, Sync> {
-    let ref families = schedule.families;
-    let ref buffers = schedule.buffers;
-    let ref images = schedule.images;
-
-    families
-        .iter()
-        .flat_map(|family| family.iter())
-        .flat_map(|queue| queue.iter())
-        .map(|(sid, submit)| (sid, sync_submit(sid, submit, buffers, images, families)))
-        .collect()
 }
 
 fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync>) {
@@ -526,6 +548,7 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync>) {
                 .iter()
                 .position(|signal| signal.point() == Point { sid, side } && signal.id() == wait.id())
                 .unwrap();
+            signal.remove(index);
         } else {
             // Keep it.
             result.push((side, wait));
@@ -538,7 +561,7 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync>) {
     }
 }
 
-pub fn optimize(families: &Families, sync: &mut HashMap<SubmitId, Sync>) {
+fn optimize(families: &Families, sync: &mut HashMap<SubmitId, Sync>) {
     for queue in families.iter().flat_map(|family| family.iter()) {
         let mut submits = queue.iter();
         while let Some((sid, _)) = submits.next_back() {

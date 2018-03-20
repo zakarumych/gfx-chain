@@ -10,12 +10,11 @@
 
 mod queue;
 
-use std::collections::hash_map::{HashMap, Iter as HashMapIter};
+use std::collections::hash_map::{HashMap, Values as HashMapValues, ValuesMut as HashMapValuesMut};
 use std::ops::{Index, IndexMut};
+use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
 use hal::queue::QueueFamilyId;
-
-use resource::{Id, Buffer, Image};
 
 pub use self::queue::{Queue, QueueId, Submit, SubmitId};
 
@@ -34,6 +33,16 @@ impl Family {
             id,
             queues: Vec::default(),
         }
+    }
+
+    /// Get iterator over references to queues
+    pub fn iter(&self) -> SliceIter<Queue> {
+        self.queues.iter()
+    }
+
+    /// Get iterator over mutable references to queues
+    pub fn iter_mut(&mut self) -> SliceIterMut<Queue> {
+        self.queues.iter_mut()
     }
 
     /// Get reference to `Queue` instance by the id.
@@ -132,9 +141,14 @@ pub struct Families {
 }
 
 impl Families {
-    /// Iterate over all families.
-    pub fn iter(&self) -> HashMapIter<QueueFamilyId, Family> {
-        self.map.iter()
+    /// Iterate over references to all families.
+    pub fn iter(&self) -> HashMapValues<QueueFamilyId, Family> {
+        self.map.values()
+    }
+
+    /// Iterate over mutable references to all families.
+    pub fn iter_mut(&mut self) -> HashMapValuesMut<QueueFamilyId, Family> {
+        self.map.values_mut()
     }
 
     /// Get reference to `Family` instance by the id.
@@ -231,23 +245,5 @@ impl Index<SubmitId> for Families {
 impl IndexMut<SubmitId> for Families {
     fn index_mut(&mut self, sid: SubmitId) -> &mut Submit {
         self.get_submit_mut(sid).unwrap()
-    }
-}
-
-/// Allows to insert links to submit generically.
-pub(crate) trait SubmitInsertLink<R> {
-    /// Insert new link into submit.
-    fn insert_link(&mut self, id: Id<R>, index: usize);
-}
-
-impl SubmitInsertLink<Buffer> for Submit {
-    fn insert_link(&mut self, id: Id<Buffer>, index: usize) {
-        self.buffers.insert(id, index);
-    }
-}
-
-impl SubmitInsertLink<Image> for Submit {
-    fn insert_link(&mut self, id: Id<Image>, index: usize) {
-        self.images.insert(id, index);
     }
 }

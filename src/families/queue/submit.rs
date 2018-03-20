@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
 
+use Pick;
 use resource::{Buffer, Id, Image};
 use pass::PassId;
 
@@ -40,8 +40,6 @@ impl SubmitId {
 /// This type corresponds to commands that should be recorded into single primary command buffer.
 #[derive(Clone, Debug)]
 pub struct Submit {
-    pub(crate) wait: Vec<(SubmitId, PipelineStage)>,
-    pub(crate) signal: Vec<(SubmitId, PipelineStage)>,
     pub(crate) buffers: HashMap<Id<Buffer>, usize>,
     pub(crate) images: HashMap<Id<Image>, usize>,
     pub(crate) pass: PassId,
@@ -52,12 +50,32 @@ impl Submit {
     /// Create new submit with specified pass.
     pub fn new(wait_factor: usize, pass: PassId) -> Self {
         Submit {
-            wait: Vec::new(),
-            signal: Vec::new(),
             buffers: HashMap::new(),
             images: HashMap::new(),
             pass,
             wait_factor,
         }
+    }
+}
+
+impl Pick<Buffer> for Submit {
+    type Target = HashMap<Id<Buffer>, usize>;
+
+    fn pick(&self) -> &HashMap<Id<Buffer>, usize> {
+        &self.buffers
+    }
+    fn pick_mut(&mut self) -> &mut HashMap<Id<Buffer>, usize> {
+        &mut self.buffers
+    }
+}
+
+impl Pick<Image> for Submit {
+    type Target = HashMap<Id<Image>, usize>;
+
+    fn pick(&self) -> &HashMap<Id<Image>, usize> {
+        &self.images
+    }
+    fn pick_mut(&mut self) -> &mut HashMap<Id<Image>, usize> {
+        &mut self.images
     }
 }

@@ -1,7 +1,7 @@
 //!
 //! This module defines `Pass` type that contains information required to
 //! synchronize execution of passes.
-//! 
+//!
 
 use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use hal::queue::QueueFamilyId;

@@ -1,5 +1,5 @@
-use std::collections::hash_map::{Entry, HashMap};
-use std::ops::Range;
+use std::collections::hash_map::{Entry, HashMap, Iter as HashMapIter};
+use std::ops::Index;
 
 use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
@@ -9,9 +9,51 @@ use families::{QueueId, SubmitId};
 
 #[derive(Clone, Debug)]
 pub struct LinkQueueState<R: Resource> {
-    pub(super) access: R::Access,
-    pub(super) stages: PipelineStage,
-    pub(super) submits: Range<usize>,
+    first: usize,
+    last: usize,
+    access: R::Access,
+    stages: PipelineStage,
+}
+
+impl<R> LinkQueueState<R>
+where
+    R: Resource,
+{
+    fn new(sid: SubmitId, state: State<R>) -> Self {
+        LinkQueueState {
+            first: sid.index(),
+            last: sid.index(),
+            access: state.access,
+            stages: state.stages,
+        }
+    }
+
+    fn push(&mut self, sid: SubmitId, state: State<R>) {
+        assert!(sid.index() == self.last);
+        self.access |= state.access;
+        self.stages |= state.stages;
+        self.last = sid.index() + 1;
+    }
+
+    ///
+    pub fn first(&self) -> usize {
+        self.first
+    }
+
+    ///
+    pub fn last(&self) -> usize {
+        self.last
+    }
+
+    ///
+    pub fn access(&self) -> R::Access {
+        self.access
+    }
+
+    ///
+    pub fn stages(&self) -> PipelineStage {
+        self.stages
+    }
 }
 
 /// This type defines what states resource are at some point in time when commands recorded into
@@ -20,9 +62,9 @@ pub struct LinkQueueState<R: Resource> {
 /// Performing actions with access types not declared by the link is prohibited.
 #[derive(Clone, Debug)]
 pub struct Link<R: Resource> {
-    pub(super) state: State<R>,
-    pub(super) queues: HashMap<usize, LinkQueueState<R>>,
-    pub(super) family: QueueFamilyId,
+    state: State<R>,
+    queues: HashMap<usize, LinkQueueState<R>>,
+    family: QueueFamilyId,
 }
 
 impl<R> Link<R>
@@ -36,18 +78,11 @@ where
     /// `state`     - state of the first submit.
     /// `sid`       - id of the first submit.
     ///
-    pub fn new(state: State<R>, sid: SubmitId) -> Self {
+    pub fn new(sid: SubmitId, state: State<R>) -> Self {
         use std::iter::once;
         Link {
             state,
-            queues: once((
-                sid.queue().index(),
-                LinkQueueState {
-                    access: state.access,
-                    stages: state.stages,
-                    submits: sid.index()..sid.index() + 1,
-                },
-            )).collect(),
+            queues: once((sid.queue().index(), LinkQueueState::new(sid, state))).collect(),
             family: sid.family(),
         }
     }
@@ -58,58 +93,37 @@ where
         self.family
     }
 
-    /// Get total state of the resource.
-    /// Total state is combination of all access types
-    /// performed by the associated submits,
-    /// all stages at which resource is accessed
-    /// and layout that supports all operations performed by all submits.
-    pub fn total_state(&self) -> State<R> {
-        self.state
+    ///
+    pub fn access(&self) -> R::Access {
+        self.state.access
     }
 
-    /// Get queue state.
-    /// This state contains only access types and stages
-    /// for submits from specified queue.
     ///
-    /// # Panics
-    ///
-    /// This function will panic if this link has no associated
-    /// submits from specified queue.
-    ///
-    pub fn queue_state(&self, qid: QueueId) -> State<R> {
-        assert_eq!(self.family, qid.family());
-        let queue = self.queues.get(&qid.index()).unwrap();
-        assert_eq!(self.state.access, self.state.access | queue.access);
-        assert_eq!(self.state.stages, self.state.stages | queue.stages);
-        State {
-            access: queue.access,
-            stages: queue.stages,
-            layout: self.state.layout,
-        }
+    pub fn layout(&self) -> R::Layout {
+        self.state.layout
     }
 
-    /// Check if the link is associated only with specified submit.
     ///
-    /// # Panic
-    ///
-    /// The function will panic if link doesn't associated with specified submit.
-    ///
-    pub fn exclusive(&self, sid: SubmitId) -> bool {
-        assert_eq!(self.family, sid.family());
-        let range = self.queues[&sid.queue().index()].submits.clone();
-        assert!(range.start <= sid.index() && range.end > sid.index());
-        range.start + 1 == range.end
+    pub fn stages(&self) -> PipelineStage {
+        self.state.stages
+    }
+
+    /// Check if the link is associated with only one submit.
+    pub fn exclusive(&self) -> bool {
+        let mut values = self.queues.values();
+        let queue = values.next().unwrap();
+        values.next().is_none() && queue.first() == queue.last()
     }
 
     /// Check of the given states and submit are compatible with link.
     /// If those are compatible then this submit can be associated with the link.
-    pub fn compatible(&self, state: State<R>, sid: SubmitId) -> bool {
+    pub fn compatible(&self, sid: SubmitId, state: State<R>) -> bool {
         // If queue the same and states are compatible.
         // And there is no later submit on the queue.
         self.family == sid.family() && self.state.compatible(state)
             && self.queues
                 .get(&sid.queue().index())
-                .map_or(true, |state| state.submits.end == sid.index())
+                .map_or(true, |state| state.last() + 1 == sid.index())
     }
 
     /// Insert submit with specified state to the link.
@@ -123,25 +137,27 @@ where
     /// This function will panic if `state` and `sid` are not compatible.
     /// E.g. `Link::compatible` didn't returned `true` for the arguments.
     ///
-    pub fn insert_submit(&mut self, state: State<R>, sid: SubmitId) {
+    pub fn insert_submit(&mut self, sid: SubmitId, state: State<R>) {
         assert_eq!(self.family, sid.family());
         let state = self.state.merge(state);
         match self.queues.entry(sid.queue().index()) {
             Entry::Occupied(mut occupied) => {
-                assert_eq!(occupied.get_mut().submits.end, sid.index());
-                occupied.get_mut().access |= state.access;
-                occupied.get_mut().stages |= state.stages;
-                occupied.get_mut().submits.end = sid.index() + 1;
+                occupied.get_mut().push(sid, state);
             }
             Entry::Vacant(vacant) => {
-                vacant.insert(LinkQueueState {
-                    access: state.access,
-                    stages: state.stages,
-                    submits: sid.index()..sid.index() + 1,
-                });
+                vacant.insert(LinkQueueState::new(sid, state));
             }
         };
         self.state = state;
+    }
+
+    /// Collect first submits from all queues.
+    /// Can be used to calculate wait-factor before inserting new submit.
+    pub fn heads(&self) -> Vec<SubmitId> {
+        self.queues
+            .iter()
+            .map(|(&index, queue)| SubmitId::new(QueueId::new(self.family, index), queue.first()))
+            .collect()
     }
 
     /// Collect last submits from all queues.
@@ -149,14 +165,65 @@ where
     pub fn tails(&self) -> Vec<SubmitId> {
         self.queues
             .iter()
-            .map(|(&index, queue)| {
-                SubmitId::new(QueueId::new(self.family, index), queue.submits.end - 1)
-            })
+            .map(|(&index, queue)| SubmitId::new(QueueId::new(self.family, index), queue.last()))
             .collect()
     }
 
     /// Check if ownership transfer is required between those links.
     pub fn transfer(&self, next: &Self) -> bool {
         self.family != next.family
+    }
+
+    ///
+    pub fn queue(&self, qid: QueueId) -> Option<&LinkQueueState<R>> {
+        assert_eq!(self.family, qid.family());
+        self.queues.get(&qid.index())
+    }
+
+    ///
+    pub fn queues(&self) -> QueuesIter<R> {
+        QueuesIter {
+            family: self.family,
+            iter: self.queues.iter(),
+        }
+    }
+
+    ///
+    pub fn queue_state(&self, qid: QueueId) -> State<R> {
+        let queue = self.queue(qid).unwrap();
+        State {
+            access: queue.access,
+            layout: self.state.layout,
+            stages: queue.stages,
+        }
+    }
+}
+
+impl<R> Index<QueueId> for Link<R>
+where
+    R: Resource,
+{
+    type Output = LinkQueueState<R>;
+
+    fn index(&self, qid: QueueId) -> &LinkQueueState<R> {
+        self.queue(qid).unwrap()
+    }
+}
+
+pub struct QueuesIter<'a, R: Resource + 'a> {
+    family: QueueFamilyId,
+    iter: HashMapIter<'a, usize, LinkQueueState<R>>,
+}
+
+impl<'a, R> Iterator for QueuesIter<'a, R>
+where
+    R: Resource + 'a,
+{
+    type Item = (QueueId, &'a LinkQueueState<R>);
+
+    fn next(&mut self) -> Option<(QueueId, &'a LinkQueueState<R>)> {
+        self.iter
+            .next()
+            .map(|(&index, queue)| (QueueId::new(self.family, index), queue))
     }
 }

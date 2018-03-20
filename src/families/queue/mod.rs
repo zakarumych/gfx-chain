@@ -1,6 +1,8 @@
 mod submit;
 
+use std::iter::Enumerate;
 use std::ops::{Index, IndexMut};
+use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
 use hal::queue::QueueFamilyId;
 
@@ -33,6 +35,36 @@ impl QueueId {
     }
 }
 
+pub struct Submits<'a> {
+    qid: QueueId,
+    iter: Enumerate<SliceIter<'a, Submit>>,
+}
+
+impl<'a> Iterator for Submits<'a> {
+    type Item = (SubmitId, &'a Submit);
+
+    fn next(&mut self) -> Option<(SubmitId, &'a Submit)> {
+        self.iter
+            .next()
+            .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
+    }
+}
+
+pub struct SubmitsMut<'a> {
+    qid: QueueId,
+    iter: Enumerate<SliceIterMut<'a, Submit>>,
+}
+
+impl<'a> Iterator for SubmitsMut<'a> {
+    type Item = (SubmitId, &'a mut Submit);
+
+    fn next(&mut self) -> Option<(SubmitId, &'a mut Submit)> {
+        self.iter
+            .next()
+            .map(|(index, submit)| (SubmitId::new(self.qid, index), submit))
+    }
+}
+
 /// Instances of this type contains array of `Submit`s.
 /// Those submits are expected to be submitted in order.
 #[derive(Clone, Debug)]
@@ -47,6 +79,22 @@ impl Queue {
         Queue {
             id,
             submits: Vec::default(),
+        }
+    }
+
+    /// Iterate over references to all submits.
+    pub fn iter(&self) -> Submits {
+        Submits {
+            qid: self.id,
+            iter: self.submits.iter().enumerate(),
+        }
+    }
+
+    /// Iterate over mutable references to all submits.
+    pub fn iter_mut(&mut self) -> SubmitsMut {
+        SubmitsMut {
+            qid: self.id,
+            iter: self.submits.iter_mut().enumerate(),
         }
     }
 

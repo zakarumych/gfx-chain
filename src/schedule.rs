@@ -2,18 +2,19 @@
 //! This module provides scheduling feature.
 //! User can manually fill `Schedule` structure.
 //! `Schedule` can be filled automatically by `schedule` function.
-//! 
+//!
 
 use std::cmp::max;
+use std::collections::HashMap;
 use hal::queue::QueueFamilyId;
 
 use chain::{BufferChains, Chain, ImageChains, Link};
 use pass::{Pass as PassDesc, PassId};
 use resource::{Resource, State};
 
+use Pick;
 use resource::Id;
-use families::{Families, QueueId, Submit, SubmitId, SubmitInsertLink};
-
+use families::{Families, QueueId, Submit, SubmitId};
 
 /// Result of pass scheduler.
 pub struct Schedule {
@@ -133,7 +134,7 @@ fn fitness(
             // Collect minimal waits required and resource transfers count.
             pass.buffers().for_each(|(id, &state)| {
                 let (t, w) = buffers.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, state, sid, families)
+                    transfers_and_wait_factor(chain, sid, state, families)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -142,7 +143,7 @@ fn fitness(
             // Collect minimal waits required and resource transfers count.
             pass.images().for_each(|(id, &state)| {
                 let (t, w) = images.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, state, sid, families)
+                    transfers_and_wait_factor(chain, sid, state, families)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -156,8 +157,8 @@ fn fitness(
 
 fn transfers_and_wait_factor<R>(
     chain: &Chain<R>,
-    state: State<R>,
     sid: SubmitId,
+    state: State<R>,
     families: &Families,
 ) -> (usize, usize)
 where
@@ -166,7 +167,7 @@ where
     let mut transfers = 0;
     let mut wait_factor = 0;
 
-    let fake_link = Link::new(state, sid);
+    let fake_link = Link::new(sid, state);
     if let Some(link) = chain.links().last() {
         transfers += if link.transfer(&fake_link) { 1 } else { 0 };
 
@@ -212,18 +213,18 @@ fn add_to_chain<R>(
     state: State<R>,
 ) where
     R: Resource,
-    Submit: SubmitInsertLink<R>,
+    Submit: Pick<R, Target = HashMap<Id<R>, usize>>,
 {
     let chain_len = chain.links().len();
     let append = match chain.last_link_mut() {
-        Some(ref mut link) if link.compatible(state, sid) => {
-            submit.insert_link(id, chain_len - 1);
-            link.insert_submit(state, sid);
+        Some(ref mut link) if link.compatible(sid, state) => {
+            submit.pick_mut().insert(id, chain_len - 1);
+            link.insert_submit(sid, state);
             None
         }
         Some(_) | None => {
-            submit.insert_link(id, chain_len);
-            Some(Link::new(state, sid))
+            submit.pick_mut().insert(id, chain_len);
+            Some(Link::new(sid, state))
         }
     };
 

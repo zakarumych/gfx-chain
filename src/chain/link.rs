@@ -5,7 +5,7 @@ use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
 
 use resource::{Resource, State};
-use families::{QueueId, SubmitId};
+use schedule::{QueueId, SubmitId};
 
 #[derive(Clone, Debug)]
 pub struct LinkQueueState<R: Resource> {

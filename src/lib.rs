@@ -16,15 +16,15 @@ extern crate gfx_hal as hal;
 #[macro_use]
 extern crate log;
 
-pub mod resource;
-pub mod pass;
-pub mod families;
 pub mod chain;
+pub mod collect;
+pub mod pass;
+pub mod resource;
 pub mod schedule;
 pub mod sync;
 
 /// Allows to insert links to submit generically.
-pub(crate) trait Pick<R> {
+trait Pick<R> {
     type Target;
     fn pick(&self) -> &Self::Target;
     fn pick_mut(&mut self) -> &mut Self::Target;

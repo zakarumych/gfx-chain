@@ -39,26 +39,28 @@ impl SubmitId {
 
 /// This type corresponds to commands that should be recorded into single primary command buffer.
 #[derive(Clone, Debug)]
-pub struct Submit {
+pub struct Submit<S> {
     pub(crate) buffers: HashMap<Id<Buffer>, usize>,
     pub(crate) images: HashMap<Id<Image>, usize>,
     pub(crate) pass: PassId,
     pub(crate) wait_factor: usize,
+    pub(crate) sync: S,
 }
 
-impl Submit {
+impl<S> Submit<S> {
     /// Create new submit with specified pass.
-    pub fn new(wait_factor: usize, pass: PassId) -> Self {
+    pub fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
         Submit {
             buffers: HashMap::new(),
             images: HashMap::new(),
             pass,
             wait_factor,
+            sync,
         }
     }
 }
 
-impl Pick<Buffer> for Submit {
+impl<S> Pick<Buffer> for Submit<S> {
     type Target = HashMap<Id<Buffer>, usize>;
 
     fn pick(&self) -> &HashMap<Id<Buffer>, usize> {
@@ -69,7 +71,7 @@ impl Pick<Buffer> for Submit {
     }
 }
 
-impl Pick<Image> for Submit {
+impl<S> Pick<Image> for Submit<S> {
     type Target = HashMap<Id<Image>, usize>;
 
     fn pick(&self) -> &HashMap<Id<Image>, usize> {

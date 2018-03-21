@@ -1,7 +1,7 @@
 //!
 //! This module provides scheduling feature.
-//! User can manually fill `Schedule` structure.
-//! `Schedule` can be filled automatically by `schedule` function.
+//! User can manually fill `Chains` structure.
+//! `Chains` can be filled automatically by `schedule` function.
 //!
 
 use std::cmp::max;
@@ -14,12 +14,15 @@ use resource::{Resource, State};
 
 use Pick;
 use resource::Id;
-use families::{Families, QueueId, Submit, SubmitId};
+use schedule::{QueueId, Schedule, Submit, SubmitId};
+
+/// Placeholder for synchronization type.
+pub struct UnSynchronized;
 
 /// Result of pass scheduler.
-pub struct Schedule {
-    /// Contains submits for passes spread among queue families.
-    pub families: Families,
+pub struct Chains<S = UnSynchronized> {
+    /// Contains submits for passes spread among queue schedule.
+    pub schedule: Schedule<S>,
 
     /// Contains all buffer chains.
     pub buffers: BufferChains,
@@ -34,9 +37,9 @@ struct Fitness {
     wait_factor: usize,
 }
 
-/// Calculate automatic `Schedule` for passes.
+/// Calculate automatic `Chains` for passes.
 /// This function tries to find most appropriate schedule for passes execution.
-pub fn schedule<F, Q>(passes: Vec<PassDesc>, max_queues: Q) -> Schedule
+pub fn collect<F, Q>(passes: Vec<PassDesc>, max_queues: Q) -> Chains
 where
     Q: Fn(QueueFamilyId) -> usize,
 {
@@ -57,8 +60,8 @@ where
     let mut images: ImageChains = ImageChains::new();
     let mut buffers: BufferChains = BufferChains::new();
 
-    // Families
-    let mut families = Families::default();
+    // Schedule
+    let mut schedule = Schedule::default();
 
     while !passes.is_empty() {
         // Find passes that are ready to be enqueued
@@ -75,7 +78,7 @@ where
                     max_queues(pass.family()),
                     &mut images,
                     &mut buffers,
-                    &families,
+                    &schedule,
                 );
                 (fitness, qid, index)
             })
@@ -89,14 +92,14 @@ where
             pass,
             qid,
             fitness.wait_factor,
-            &mut families,
+            &mut schedule,
             &mut images,
             &mut buffers,
         );
     }
 
-    Schedule {
-        families,
+    Chains {
+        schedule,
         buffers,
         images,
     }
@@ -112,19 +115,19 @@ fn all_there(all: &[usize], there: &[usize]) -> bool {
     true
 }
 
-fn fitness(
+fn fitness<S>(
     pass: &PassDesc,
     max_queues: usize,
     images: &mut ImageChains,
     buffers: &mut BufferChains,
-    families: &Families,
+    schedule: &Schedule<S>,
 ) -> (Fitness, QueueId) {
     // Find best queue for pass.
     pass.queue()
         .map_or((0..max_queues), |queue| queue..queue + 1)
         .map(|index| {
             let qid = QueueId::new(pass.family(), index);
-            let sid = SubmitId::new(qid, families.get_queue(qid).map_or(0, |queue| queue.len()));
+            let sid = SubmitId::new(qid, schedule.get_queue(qid).map_or(0, |queue| queue.len()));
 
             let mut result = Fitness {
                 transfers: 0,
@@ -134,7 +137,7 @@ fn fitness(
             // Collect minimal waits required and resource transfers count.
             pass.buffers().for_each(|(id, &state)| {
                 let (t, w) = buffers.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, sid, state, families)
+                    transfers_and_wait_factor(chain, sid, state, schedule)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -143,7 +146,7 @@ fn fitness(
             // Collect minimal waits required and resource transfers count.
             pass.images().for_each(|(id, &state)| {
                 let (t, w) = images.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, sid, state, families)
+                    transfers_and_wait_factor(chain, sid, state, schedule)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -155,11 +158,11 @@ fn fitness(
         .unwrap()
 }
 
-fn transfers_and_wait_factor<R>(
+fn transfers_and_wait_factor<R, S>(
     chain: &Chain<R>,
     sid: SubmitId,
     state: State<R>,
-    families: &Families,
+    schedule: &Schedule<S>,
 ) -> (usize, usize)
 where
     R: Resource,
@@ -172,7 +175,7 @@ where
         transfers += if link.transfer(&fake_link) { 1 } else { 0 };
 
         for tail in link.tails() {
-            wait_factor = max(families[tail].wait_factor, wait_factor);
+            wait_factor = max(schedule[tail].wait_factor, wait_factor);
         }
     }
 
@@ -184,14 +187,14 @@ fn schedule_pass(
     pass: PassDesc,
     qid: QueueId,
     wait_factor: usize,
-    families: &mut Families,
+    schedule: &mut Schedule<UnSynchronized>,
     images: &mut ImageChains,
     buffers: &mut BufferChains,
 ) {
     assert_eq!(qid.family(), pass.family());
 
-    let ref mut queue = families.ensure_queue(qid);
-    let sid = queue.add_submit(Submit::new(wait_factor, pid));
+    let ref mut queue = schedule.ensure_queue(qid);
+    let sid = queue.add_submit(Submit::new(wait_factor, pid, UnSynchronized));
     let ref mut submit = queue[sid];
 
     for (&id, &state) in pass.buffers() {
@@ -205,15 +208,15 @@ fn schedule_pass(
     }
 }
 
-fn add_to_chain<R>(
+fn add_to_chain<R, S>(
     id: Id<R>,
     chain: &mut Chain<R>,
     sid: SubmitId,
-    submit: &mut Submit,
+    submit: &mut Submit<S>,
     state: State<R>,
 ) where
     R: Resource,
-    Submit: Pick<R, Target = HashMap<Id<R>, usize>>,
+    Submit<S>: Pick<R, Target = HashMap<Id<R>, usize>>,
 {
     let chain_len = chain.links().len();
     let append = match chain.last_link_mut() {

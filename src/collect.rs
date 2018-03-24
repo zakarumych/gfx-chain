@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use hal::queue::QueueFamilyId;
 
 use chain::{BufferChains, Chain, ImageChains, Link};
-use pass::{Pass as PassDesc, PassId};
+use pass::{Pass, PassId};
 use resource::{Resource, State};
 
 use Pick;
@@ -39,7 +39,7 @@ struct Fitness {
 
 /// Calculate automatic `Chains` for passes.
 /// This function tries to find most appropriate schedule for passes execution.
-pub fn collect<F, Q>(passes: Vec<PassDesc>, max_queues: Q) -> Chains
+pub fn collect<F, Q>(passes: Vec<Pass>, max_queues: Q) -> Chains
 where
     Q: Fn(QueueFamilyId) -> usize,
 {
@@ -116,7 +116,7 @@ fn all_there(all: &[usize], there: &[usize]) -> bool {
 }
 
 fn fitness<S>(
-    pass: &PassDesc,
+    pass: &Pass,
     max_queues: usize,
     images: &mut ImageChains,
     buffers: &mut BufferChains,
@@ -184,7 +184,7 @@ where
 
 fn schedule_pass(
     pid: PassId,
-    pass: PassDesc,
+    pass: Pass,
     qid: QueueId,
     wait_factor: usize,
     schedule: &mut Schedule<UnSynchronized>,

@@ -19,7 +19,7 @@ fn earlier_stage(stages: PipelineStage) -> PipelineStage {
 }
 
 /// Side of the submit. `Acquire` or `Release`.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum Side {
     /// Acquire side of the submit.
     /// Synchronization commands from this side must be recorded before main commands of submit.
@@ -31,7 +31,7 @@ pub enum Side {
 }
 
 /// Point in execution graph. Target submit and side.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Point {
     /// Id of submit.
     pub sid: SubmitId,
@@ -62,7 +62,7 @@ impl PartialOrd<Self> for Point {
 /// Semaphore identifier.
 /// It allows to distinguish different semaphores to be later replaced in `Signal`s and `Wait`s
 /// for references to semaphores (or tokens associated with real semaphores).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Semaphore {
     id: Uid,
     points: Range<Point>,
@@ -134,6 +134,7 @@ impl<S> Wait<S> {
 }
 
 /// Pipeline barrier info.
+#[derive(Clone, Debug)]
 pub struct Barrier<R: Resource> {
     /// `Some` queue for ownership transfer. Or `None`
     pub queues: Option<Range<QueueId>>,
@@ -201,9 +202,9 @@ pub type BufferBarriers = Barriers<Buffer>;
 pub type ImageBarriers = Barriers<Image>;
 
 /// Synchronization for submit at one side.
-pub struct Guard<S> {
+pub struct Guard<S, W = S> {
     /// Points at other queues that must be waited before commands from the submit can be executed.
-    pub wait: Vec<Wait<S>>,
+    pub wait: Vec<Wait<W>>,
 
     /// Buffer pipeline barriers to be inserted before or after (depends on the side) main commands of the submit.
     pub buffers: BufferBarriers,
@@ -215,7 +216,7 @@ pub struct Guard<S> {
     pub signal: Vec<Signal<S>>,
 }
 
-impl<S> Guard<S> {
+impl<S, W> Guard<S, W> {
     fn new() -> Self {
         Guard {
             wait: Vec::new(),
@@ -226,7 +227,7 @@ impl<S> Guard<S> {
     }
 }
 
-impl<S> Pick<Image> for Guard<S> {
+impl<S, W> Pick<Image> for Guard<S, W> {
     type Target = ImageBarriers;
 
     fn pick(&self) -> &ImageBarriers {
@@ -237,7 +238,7 @@ impl<S> Pick<Image> for Guard<S> {
     }
 }
 
-impl<S> Pick<Buffer> for Guard<S> {
+impl<S, W> Pick<Buffer> for Guard<S, W> {
     type Target = BufferBarriers;
 
     fn pick(&self) -> &BufferBarriers {
@@ -249,14 +250,14 @@ impl<S> Pick<Buffer> for Guard<S> {
 }
 
 /// Both sides of synchronization for submit.
-pub struct Sync<S> {
+pub struct Sync<S, W = S> {
     /// Acquire side of submit synchronization.
-    pub acquire: Guard<S>,
+    pub acquire: Guard<S, W>,
     /// Release side of submit synchronization.
-    pub release: Guard<S>,
+    pub release: Guard<S, W>,
 }
 
-impl<S> Sync<S> {
+impl<S, W> Sync<S, W> {
     fn new() -> Self {
         Sync {
             acquire: Guard::new(),
@@ -265,7 +266,7 @@ impl<S> Sync<S> {
     }
 
     /// Get reference to `Guard` by `Side`.
-    pub fn get(&self, side: Side) -> &Guard<S> {
+    pub fn get(&self, side: Side) -> &Guard<S, W> {
         match side {
             Side::Acquire => &self.acquire,
             Side::Release => &self.release,
@@ -273,18 +274,58 @@ impl<S> Sync<S> {
     }
 
     /// Get mutable reference to `Guard` by `Side`.
-    pub fn get_mut(&mut self, side: Side) -> &mut Guard<S> {
+    pub fn get_mut(&mut self, side: Side) -> &mut Guard<S, W> {
         match side {
             Side::Acquire => &mut self.acquire,
             Side::Release => &mut self.release,
         }
     }
+
+    fn convert_signal<F, T>(self, mut f: F) -> Sync<T, W>
+    where
+        F: FnMut(S) -> T,
+    {
+        Sync {
+            acquire: Guard {
+                wait: self.acquire.wait,
+                signal: self.acquire.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
+                buffers: self.acquire.buffers.clone(),
+                images: self.acquire.images.clone(),
+            },
+            release: Guard {
+                wait: self.release.wait,
+                signal: self.release.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
+                buffers: self.release.buffers.clone(),
+                images: self.release.images.clone(),
+            },
+        }
+    }
+
+    fn convert_wait<F, T>(self, mut f: F) -> Sync<S, T>
+    where
+        F: FnMut(W) -> T,
+    {
+        Sync {
+            acquire: Guard {
+                wait: self.acquire.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
+                signal: self.acquire.signal,
+                buffers: self.acquire.buffers.clone(),
+                images: self.acquire.images.clone(),
+            },
+            release: Guard {
+                wait: self.release.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
+                signal: self.release.signal,
+                buffers: self.release.buffers.clone(),
+                images: self.release.images.clone(),
+            },
+        }
+    }
 }
 
 /// Find required synchronization for all submits in `Chains`.
-pub fn sync<F, S>(chains: &Chains, new_semaphore: F) -> Schedule<Sync<S>>
+pub fn sync<F, S, W>(chains: &Chains, mut new_semaphore: F) -> Schedule<Sync<S, W>>
 where
-    F: FnMut() -> S,
+    F: FnMut() -> (S, W),
 {
     let ref schedule = chains.schedule;
     let ref buffers = chains.buffers;
@@ -299,9 +340,43 @@ where
 
     optimize(schedule, &mut sync);
 
-    // Create real semaphores.
-    // And place synchronization into `Schedule`.
-    unimplemented!()
+    let mut result = Schedule::default();
+    let mut signals: HashMap<Semaphore, Option<S>> = HashMap::new();
+    let mut waits: HashMap<Semaphore, Option<W>> = HashMap::new();
+
+    for (sid, submit) in schedule
+        .iter()
+        .flat_map(|family| family.iter())
+        .flat_map(|queue| queue.iter()) {
+            let sync = sync.remove(&sid).unwrap();
+            let sync = sync.convert_signal(|semaphore| {
+                match signals.get_mut(&semaphore) {
+                    None => {
+                        let (signal, wait) = new_semaphore();
+                        assert!(waits.insert(semaphore, Some(wait)).is_none());
+                        signal
+                    }
+                    Some(signal) => {
+                        signal.take().unwrap()
+                    }
+                }
+            });
+            let sync = sync.convert_wait(|semaphore| {
+                match waits.get_mut(&semaphore) {
+                    None => {
+                        let (signal, wait) = new_semaphore();
+                        assert!(signals.insert(semaphore, Some(signal)).is_none());
+                        wait
+                    }
+                    Some(wait) => {
+                        wait.take().unwrap()
+                    }
+                }
+            });
+            assert_eq!(sid, result.ensure_queue(sid.queue()).add_submit(submit.set_sync(sync)));
+        }
+
+    result
 }
 
 fn latest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmitId

@@ -58,6 +58,17 @@ impl<S> Submit<S> {
             sync,
         }
     }
+
+    /// Set new synchronization to the `Submit`.
+    pub fn set_sync<T>(&self, sync: T) -> Submit<T> {
+        Submit {
+            buffers: self.buffers.clone(),
+            images: self.images.clone(),
+            pass: self.pass,
+            wait_factor: self.wait_factor,
+            sync,
+        }
+    }
 }
 
 impl<S> Pick<Buffer> for Submit<S> {

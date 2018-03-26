@@ -8,7 +8,6 @@
 mod link;
 
 use std::collections::HashMap;
-use hal::queue::QueueFamilyId;
 use resource::{Buffer, Id, Image, Resource};
 
 pub use self::link::Link;
@@ -24,19 +23,16 @@ impl<R> Chain<R>
 where
     R: Resource,
 {
-    /// Get family of last link.
-    pub fn last_family(&self) -> Option<QueueFamilyId> {
-        self.links.last().map(|link| link.family())
-    }
-
     /// Get links slice
     pub fn links(&self) -> &[Link<R>] {
         &self.links
     }
 
-    /// Get links slice
-    pub fn last_link(&self) -> Option<&Link<R>> {
-        self.links.last()
+    /// Create new empty `Chain`
+    pub fn new() -> Self {
+        Chain {
+            links: Vec::new()
+        }
     }
 
     /// Get links slice
@@ -48,15 +44,6 @@ where
     pub fn add_link(&mut self, link: Link<R>) -> &mut Link<R> {
         self.links.push(link);
         self.links.last_mut().unwrap()
-    }
-}
-
-impl<R> Default for Chain<R>
-where
-    R: Resource,
-{
-    fn default() -> Self {
-        Chain { links: Vec::new() }
     }
 }
 

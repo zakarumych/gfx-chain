@@ -14,14 +14,14 @@ use resource::{Resource, State};
 
 use Pick;
 use resource::Id;
-use schedule::{QueueId, Schedule, Submit, SubmitId};
+use schedule::{QueueId, Schedule, Submission, SubmissionId};
 
 /// Placeholder for synchronization type.
-pub struct UnSynchronized;
+pub struct Unsynchronized;
 
 /// Result of pass scheduler.
-pub struct Chains<S = UnSynchronized> {
-    /// Contains submits for passes spread among queue schedule.
+pub struct Chains<S = Unsynchronized> {
+    /// Contains submissions for passes spread among queue schedule.
     pub schedule: Schedule<S>,
 
     /// Contains all buffer chains.
@@ -39,7 +39,7 @@ struct Fitness {
 
 /// Calculate automatic `Chains` for passes.
 /// This function tries to find most appropriate schedule for passes execution.
-pub fn collect<F, Q>(passes: Vec<Pass>, max_queues: Q) -> Chains
+pub fn collect<Q>(passes: Vec<Pass>, max_queues: Q) -> Chains
 where
     Q: Fn(QueueFamilyId) -> usize,
 {
@@ -53,8 +53,8 @@ where
         })
         .collect::<Vec<_>>();
 
-    // Track enqueued.
-    let mut enqueued: Vec<usize> = Vec::new();
+    // Track scheduled.
+    let mut scheduled: Vec<PassId> = Vec::new();
 
     // Chains.
     let mut images: ImageChains = ImageChains::new();
@@ -64,14 +64,14 @@ where
     let mut schedule = Schedule::default();
 
     while !passes.is_empty() {
-        // Find passes that are ready to be enqueued
-        // E.g. All dependencies are enqueued.
-        enqueued.sort();
+        // Find passes that are ready to be scheduled
+        // E.g. All dependencies are scheduled.
+        scheduled.sort();
         // Among ready passes find best fit.
         let (fitness, qid, index) = passes
             .iter()
             .enumerate()
-            .filter(|&(_, &(_, ref pass))| all_there(pass.dependencies(), &enqueued))
+            .filter(|&(_, &(_, ref pass))| all_there(pass.dependencies(), &scheduled))
             .map(|(index, &(_, ref pass))| {
                 let (fitness, qid) = fitness(
                     pass,
@@ -86,6 +86,7 @@ where
             .unwrap();
 
         let (index, pass) = passes.swap_remove(index);
+        scheduled.push(index);
 
         schedule_pass(
             index,
@@ -105,7 +106,7 @@ where
     }
 }
 
-fn all_there(all: &[usize], there: &[usize]) -> bool {
+fn all_there(all: &[PassId], there: &[PassId]) -> bool {
     let mut there = there.into_iter();
     for &a in all {
         if there.find(|&&t| t == a).is_none() {
@@ -127,7 +128,7 @@ fn fitness<S>(
         .map_or((0..max_queues), |queue| queue..queue + 1)
         .map(|index| {
             let qid = QueueId::new(pass.family(), index);
-            let sid = SubmitId::new(qid, schedule.get_queue(qid).map_or(0, |queue| queue.len()));
+            let sid = SubmissionId::new(qid, schedule.queue(qid).map_or(0, |queue| queue.len()));
 
             let mut result = Fitness {
                 transfers: 0,
@@ -160,7 +161,7 @@ fn fitness<S>(
 
 fn transfers_and_wait_factor<R, S>(
     chain: &Chain<R>,
-    sid: SubmitId,
+    sid: SubmissionId,
     state: State<R>,
     schedule: &Schedule<S>,
 ) -> (usize, usize)
@@ -175,7 +176,7 @@ where
         transfers += if link.transfer(&fake_link) { 1 } else { 0 };
 
         for tail in link.tails() {
-            wait_factor = max(schedule[tail].wait_factor, wait_factor);
+            wait_factor = max(schedule[tail].wait_factor(), wait_factor);
         }
     }
 
@@ -187,46 +188,46 @@ fn schedule_pass(
     pass: Pass,
     qid: QueueId,
     wait_factor: usize,
-    schedule: &mut Schedule<UnSynchronized>,
+    schedule: &mut Schedule<Unsynchronized>,
     images: &mut ImageChains,
     buffers: &mut BufferChains,
 ) {
     assert_eq!(qid.family(), pass.family());
 
     let ref mut queue = schedule.ensure_queue(qid);
-    let sid = queue.add_submit(Submit::new(wait_factor, pid, UnSynchronized));
-    let ref mut submit = queue[sid];
+    let sid = queue.add_submission(Submission::new(wait_factor, pid, Unsynchronized));
+    let ref mut submission = queue[sid];
 
     for (&id, &state) in pass.buffers() {
-        let chain = buffers.entry(id).or_insert_with(|| Chain::default());
-        add_to_chain(id, chain, sid, submit, state);
+        let chain = buffers.entry(id).or_insert_with(|| Chain::new());
+        add_to_chain(id, chain, sid, submission, state);
     }
 
     for (&id, &state) in pass.images() {
-        let chain = images.entry(id).or_insert_with(|| Chain::default());
-        add_to_chain(id, chain, sid, submit, state);
+        let chain = images.entry(id).or_insert_with(|| Chain::new());
+        add_to_chain(id, chain, sid, submission, state);
     }
 }
 
 fn add_to_chain<R, S>(
     id: Id<R>,
     chain: &mut Chain<R>,
-    sid: SubmitId,
-    submit: &mut Submit<S>,
+    sid: SubmissionId,
+    submission: &mut Submission<S>,
     state: State<R>,
 ) where
     R: Resource,
-    Submit<S>: Pick<R, Target = HashMap<Id<R>, usize>>,
+    Submission<S>: Pick<R, Target = HashMap<Id<R>, usize>>,
 {
     let chain_len = chain.links().len();
     let append = match chain.last_link_mut() {
         Some(ref mut link) if link.compatible(sid, state) => {
-            submit.pick_mut().insert(id, chain_len - 1);
-            link.insert_submit(sid, state);
+            submission.pick_mut().insert(id, chain_len - 1);
+            link.insert_submission(sid, state);
             None
         }
         Some(_) | None => {
-            submit.pick_mut().insert(id, chain_len);
+            submission.pick_mut().insert(id, chain_len);
             Some(Link::new(sid, state))
         }
     };

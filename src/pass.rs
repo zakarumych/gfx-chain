@@ -22,7 +22,7 @@ pub struct Pass {
 
     /// Dependencies of the pass.
     /// Those are indices of other passes in array.
-    pub dependencies: Vec<usize>,
+    pub dependencies: Vec<PassId>,
 
     /// Buffer category ids and required state.
     pub buffers: HashMap<Id<Buffer>, State<Buffer>>,
@@ -43,7 +43,7 @@ impl Pass {
     }
 
     /// Get indices of passes this pass depends on.
-    pub fn dependencies(&self) -> &[usize] {
+    pub fn dependencies(&self) -> &[PassId] {
         &self.dependencies
     }
 

@@ -11,37 +11,56 @@ use hal::pso::PipelineStage;
 use Pick;
 use chain::{BufferChains, Chain, ImageChains, Link};
 use collect::Chains;
-use resource::{Access, Buffer, Id, Image, Resource, State, Uid};
-use schedule::{QueueId, Schedule, Submit, SubmitId};
+use resource::{Access, Buffer, Id, Image, Resource, State};
+use schedule::{QueueId, Schedule, Submission, SubmissionId};
 
 fn earlier_stage(stages: PipelineStage) -> PipelineStage {
     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
 }
 
-/// Side of the submit. `Acquire` or `Release`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Uid {
+    Buffer(u32),
+    Image(u32),
+}
+
+impl From<Id<Buffer>> for Uid {
+    fn from(id: Id<Buffer>) -> Uid {
+        Uid::Buffer(id.index())
+    }
+}
+
+impl From<Id<Image>> for Uid {
+    fn from(id: Id<Image>) -> Uid {
+        Uid::Image(id.index())
+    }
+}
+
+
+/// Side of the submission. `Acquire` or `Release`.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub enum Side {
-    /// Acquire side of the submit.
-    /// Synchronization commands from this side must be recorded before main commands of submit.
+enum Side {
+    /// Acquire side of the submission.
+    /// Synchronization commands from this side must be recorded before main commands of submission.
     Acquire,
 
-    /// Release side of the submit.
-    /// Synchronization commands from this side must be recorded after main commands of submit.
+    /// Release side of the submission.
+    /// Synchronization commands from this side must be recorded after main commands of submission.
     Release,
 }
 
-/// Point in execution graph. Target submit and side.
+/// Point in execution graph. Target submission and side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Point {
-    /// Id of submit.
-    pub sid: SubmitId,
+struct Point {
+    /// Id of submission.
+    sid: SubmissionId,
 
-    /// Side of the submit.
-    pub side: Side,
+    /// Side of the submission.
+    side: Side,
 }
 
 impl Point {
-    fn new(sid: SubmitId, side: Side) -> Self {
+    fn new(sid: SubmissionId, side: Side) -> Self {
         Point { sid, side }
     }
 }
@@ -63,7 +82,7 @@ impl PartialOrd<Self> for Point {
 /// It allows to distinguish different semaphores to be later replaced in `Signal`s and `Wait`s
 /// for references to semaphores (or tokens associated with real semaphores).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Semaphore {
+struct Semaphore {
     id: Uid,
     points: Range<Point>,
 }
@@ -72,6 +91,7 @@ impl Semaphore {
     fn new<R>(id: Id<R>, points: Range<Point>) -> Self
     where
         R: Resource,
+        Id<R>: Into<Uid>,
     {
         Semaphore {
             id: id.into(),
@@ -79,13 +99,8 @@ impl Semaphore {
         }
     }
 
-    /// Id of the signal.
-    pub fn id(&self) -> Uid {
-        self.id
-    }
-
     /// Point for which to signal.
-    pub fn points(&self) -> Range<Point> {
+    fn points(&self) -> Range<Point> {
         self.points.clone()
     }
 }
@@ -201,15 +216,15 @@ pub type BufferBarriers = Barriers<Buffer>;
 /// Map of barriers by image id.
 pub type ImageBarriers = Barriers<Image>;
 
-/// Synchronization for submit at one side.
-pub struct Guard<S, W = S> {
-    /// Points at other queues that must be waited before commands from the submit can be executed.
+/// Synchronization for submission at one side.
+pub struct Guard<S, W> {
+    /// Points at other queues that must be waited before commands from the submission can be executed.
     pub wait: Vec<Wait<W>>,
 
-    /// Buffer pipeline barriers to be inserted before or after (depends on the side) main commands of the submit.
+    /// Buffer pipeline barriers to be inserted before or after (depends on the side) main commands of the submission.
     pub buffers: BufferBarriers,
 
-    /// Image pipeline barriers to be inserted before or after (depends on the side) main commands of the submit.
+    /// Image pipeline barriers to be inserted before or after (depends on the side) main commands of the submission.
     pub images: ImageBarriers,
 
     /// Points at other queues that can run after barriers above.
@@ -249,11 +264,11 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
     }
 }
 
-/// Both sides of synchronization for submit.
-pub struct Sync<S, W = S> {
-    /// Acquire side of submit synchronization.
+/// Both sides of synchronization for submission.
+pub struct Sync<S, W> {
+    /// Acquire side of submission synchronization.
     pub acquire: Guard<S, W>,
-    /// Release side of submit synchronization.
+    /// Release side of submission synchronization.
     pub release: Guard<S, W>,
 }
 
@@ -265,16 +280,8 @@ impl<S, W> Sync<S, W> {
         }
     }
 
-    /// Get reference to `Guard` by `Side`.
-    pub fn get(&self, side: Side) -> &Guard<S, W> {
-        match side {
-            Side::Acquire => &self.acquire,
-            Side::Release => &self.release,
-        }
-    }
-
     /// Get mutable reference to `Guard` by `Side`.
-    pub fn get_mut(&mut self, side: Side) -> &mut Guard<S, W> {
+    fn get_mut(&mut self, side: Side) -> &mut Guard<S, W> {
         match side {
             Side::Acquire => &mut self.acquire,
             Side::Release => &mut self.release,
@@ -322,7 +329,7 @@ impl<S, W> Sync<S, W> {
     }
 }
 
-/// Find required synchronization for all submits in `Chains`.
+/// Find required synchronization for all submissions in `Chains`.
 pub fn sync<F, S, W>(chains: &Chains, mut new_semaphore: F) -> Schedule<Sync<S, W>>
 where
     F: FnMut() -> (S, W),
@@ -335,7 +342,7 @@ where
         .iter()
         .flat_map(|family| family.iter())
         .flat_map(|queue| queue.iter())
-        .map(|(sid, submit)| (sid, sync_submit(sid, submit, buffers, images, schedule)))
+        .map(|(sid, submission)| (sid, sync_submission(sid, submission, buffers, images, schedule)))
         .collect();
 
     optimize(schedule, &mut sync);
@@ -344,7 +351,7 @@ where
     let mut signals: HashMap<Semaphore, Option<S>> = HashMap::new();
     let mut waits: HashMap<Semaphore, Option<W>> = HashMap::new();
 
-    for (sid, submit) in schedule
+    for (sid, submission) in schedule
         .iter()
         .flat_map(|family| family.iter())
         .flat_map(|queue| queue.iter()) {
@@ -373,55 +380,59 @@ where
                     }
                 }
             });
-            assert_eq!(sid, result.ensure_queue(sid.queue()).add_submit(submit.set_sync(sync)));
+            assert_eq!(sid, result.ensure_queue(sid.queue()).add_submission(submission.set_sync(sync)));
         }
+
+    assert!(signals.is_empty());
+    assert!(waits.is_empty());
 
     result
 }
 
-fn latest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmitId
+fn latest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
 {
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
-            let sid = SubmitId::new(qid, queue.last());
-            (schedule[sid].wait_factor, sid)
+            let sid = SubmissionId::new(qid, queue.last());
+            (schedule[sid].wait_factor(), sid)
         })
         .max_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
         .unwrap();
     sid
 }
 
-fn earliest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmitId
+fn earliest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
 {
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
-            let sid = SubmitId::new(qid, queue.first());
-            (schedule[sid].wait_factor, sid)
+            let sid = SubmissionId::new(qid, queue.first());
+            (schedule[sid].wait_factor(), sid)
         })
         .min_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
         .unwrap();
     sid
 }
 
-fn sync_submit_chain<R, S>(
-    sid: SubmitId,
-    _submit: &Submit<S>,
+fn sync_submission_chain<R, S>(
+    sid: SubmissionId,
+    _submission: &Submission<S>,
     link_index: usize,
     id: Id<R>,
     chain: &Chain<R>,
     schedule: &Schedule<S>,
-    sync: &mut Sync<Semaphore>,
+    sync: &mut Sync<Semaphore, Semaphore>,
 ) where
     R: Resource,
-    Guard<Semaphore>: Pick<R, Target = Barriers<R>>,
+    Id<R>: Into<Uid>,
+    Guard<Semaphore, Semaphore>: Pick<R, Target = Barriers<R>>,
 {
     let ref this = chain.links()[link_index];
     assert_eq!(this.family(), sid.family());
-    let ref queue = this[sid.queue()];
+    let ref queue = this.queue(sid.queue()).unwrap();
     assert!(queue.first() <= sid.index());
     assert!(queue.last() >= sid.index());
 
@@ -433,11 +444,11 @@ fn sync_submit_chain<R, S>(
         if prev.family() != this.family() {
             // Transfer ownership.
 
-            // Find earliest submit from this chain.
+            // Find earliest submission from this chain.
             // It will acquire ownership.
             let this_earliest = earliest(this, schedule);
             if this_earliest == sid {
-                // Find latest submit from prev chain.
+                // Find latest submission from prev chain.
                 // It will release ownership.
                 let prev_latest = latest(prev, schedule);
 
@@ -465,7 +476,7 @@ fn sync_submit_chain<R, S>(
                     sync.acquire.signal.push(Signal::new(Semaphore::new(
                         id,
                         Point::new(sid, Side::Acquire)
-                            ..Point::new(SubmitId::new(qid, queue.first()), Side::Acquire),
+                            ..Point::new(SubmissionId::new(qid, queue.first()), Side::Acquire),
                     )));
                 }
             } else {
@@ -509,7 +520,7 @@ fn sync_submit_chain<R, S>(
         if next.family() != this.family() {
             // Transfer ownership.
 
-            // Find latest submit from this chain.
+            // Find latest submission from this chain.
             // It will release ownership.
             let this_latest = latest(this, schedule);
             if this_latest == sid {
@@ -518,14 +529,14 @@ fn sync_submit_chain<R, S>(
                     sync.release.wait.push(Wait::new(
                         Semaphore::new(
                             id,
-                            Point::new(SubmitId::new(qid, queue.last()), Side::Release)
+                            Point::new(SubmissionId::new(qid, queue.last()), Side::Release)
                                 ..Point::new(sid, Side::Release),
                         ),
                         PipelineStage::TOP_OF_PIPE,
                     ));
                 }
 
-                // Find earliest submit from next chain.
+                // Find earliest submission from next chain.
                 // It will acquire ownership.
                 let next_earliest = earliest(next, schedule);
 
@@ -574,28 +585,28 @@ fn sync_submit_chain<R, S>(
     }
 }
 
-fn sync_submit<S>(
-    sid: SubmitId,
-    submit: &Submit<S>,
+fn sync_submission<S>(
+    sid: SubmissionId,
+    submission: &Submission<S>,
     buffers: &BufferChains,
     images: &ImageChains,
     schedule: &Schedule<S>,
-) -> Sync<Semaphore> {
+) -> Sync<Semaphore, Semaphore> {
     let mut sync = Sync::new();
-    for (&id, &index) in submit.buffers.iter() {
+    for (&id, &index) in submission.buffers() {
         let ref chain = buffers[&id];
-        sync_submit_chain(sid, submit, index, id, chain, schedule, &mut sync);
+        sync_submission_chain(sid, submission, index, id, chain, schedule, &mut sync);
     }
 
-    for (&id, &index) in submit.images.iter() {
+    for (&id, &index) in submission.images() {
         let ref chain = images[&id];
-        sync_submit_chain(sid, submit, index, id, chain, schedule, &mut sync);
+        sync_submission_chain(sid, submission, index, id, chain, schedule, &mut sync);
     }
 
     sync
 }
 
-fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync<Semaphore>>) {
+fn optimize_submission(sid: SubmissionId, sync: &mut HashMap<SubmissionId, Sync<Semaphore, Semaphore>>) {
     use std::mem::replace;
 
     // Take all waits
@@ -633,7 +644,7 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync<Semaphore>>)
         // Check all earlier waits.
         // This includes all waits from earlier stages.
         // All waits from acquire side are before waits from release side.
-        // Also all waits from earlier submits.
+        // Also all waits from earlier submissions.
         let redundant = both_side_wait
             .as_slice()
             .iter()
@@ -642,7 +653,7 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync<Semaphore>>)
             .chain(
                 (0..sid.index())
                     .rev()
-                    .filter_map(|index| sync.get(&SubmitId::new(sid.queue(), index)))
+                    .filter_map(|index| sync.get(&SubmissionId::new(sid.queue(), index)))
                     .flat_map(|sync| sync.release.wait.iter().chain(sync.acquire.wait.iter())),
             )
             .any(|earlier| {
@@ -670,11 +681,11 @@ fn optimize_submit(sid: SubmitId, sync: &mut HashMap<SubmitId, Sync<Semaphore>>)
     }
 }
 
-fn optimize<S>(schedule: &Schedule<S>, sync: &mut HashMap<SubmitId, Sync<Semaphore>>) {
+fn optimize<S>(schedule: &Schedule<S>, sync: &mut HashMap<SubmissionId, Sync<Semaphore, Semaphore>>) {
     for queue in schedule.iter().flat_map(|family| family.iter()) {
-        let mut submits = queue.iter();
-        while let Some((sid, _)) = submits.next_back() {
-            optimize_submit(sid, sync);
+        let mut submissions = queue.iter();
+        while let Some((sid, _)) = submissions.next_back() {
+            optimize_submission(sid, sync);
         }
     }
 }

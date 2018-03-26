@@ -3,7 +3,7 @@ use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
 use hal::queue::QueueFamilyId;
 
-use super::submit::{Submit, SubmitId};
+use super::submission::{Submission, SubmissionId};
 use super::queue::{Queue, QueueId};
 
 /// Instances of this type contains array of `Queue`s.
@@ -39,7 +39,7 @@ impl<S> Family<S> {
     ///
     /// This function will panic if requested queue isn't part of this family.
     ///
-    pub fn get_queue(&self, qid: QueueId) -> Option<&Queue<S>> {
+    pub fn queue(&self, qid: QueueId) -> Option<&Queue<S>> {
         assert_eq!(self.id, qid.family());
         self.queues.get(qid.index())
     }
@@ -50,7 +50,7 @@ impl<S> Family<S> {
     ///
     /// This function will panic if requested queue isn't part of this family.
     ///
-    pub fn get_queue_mut(&mut self, qid: QueueId) -> Option<&mut Queue<S>> {
+    pub fn queue_mut(&mut self, qid: QueueId) -> Option<&mut Queue<S>> {
         assert_eq!(self.id, qid.family());
         self.queues.get_mut(qid.index())
     }
@@ -70,28 +70,28 @@ impl<S> Family<S> {
         &mut self.queues[qid.index()]
     }
 
-    /// Get reference to `Submit<S>` instance by id.
+    /// Get reference to `Submission<S>` instance by id.
     ///
     /// # Panic
     ///
-    /// This function will panic if requested submit isn't part of this family.
+    /// This function will panic if requested submission isn't part of this family.
     ///
-    pub fn get_submit(&self, sid: SubmitId) -> Option<&Submit<S>> {
+    pub fn submission(&self, sid: SubmissionId) -> Option<&Submission<S>> {
         assert_eq!(self.id, sid.family());
-        self.get_queue(sid.queue())
-            .and_then(|queue| queue.get_submit(sid))
+        self.queue(sid.queue())
+            .and_then(|queue| queue.submission(sid))
     }
 
-    /// Get mutable reference to `Submit<S>` instance by id.
+    /// Get mutable reference to `Submission<S>` instance by id.
     ///
     /// # Panic
     ///
-    /// This function will panic if requested submit isn't part of this family.
+    /// This function will panic if requested submission isn't part of this family.
     ///
-    pub fn get_submit_mut(&mut self, sid: SubmitId) -> Option<&mut Submit<S>> {
+    pub fn submission_mut(&mut self, sid: SubmissionId) -> Option<&mut Submission<S>> {
         assert_eq!(self.id, sid.family());
-        self.get_queue_mut(sid.queue())
-            .and_then(|queue| queue.get_submit_mut(sid))
+        self.queue_mut(sid.queue())
+            .and_then(|queue| queue.submission_mut(sid))
     }
 }
 
@@ -99,26 +99,26 @@ impl<S> Index<QueueId> for Family<S> {
     type Output = Queue<S>;
 
     fn index(&self, qid: QueueId) -> &Queue<S> {
-        self.get_queue(qid).unwrap()
+        self.queue(qid).unwrap()
     }
 }
 
 impl<S> IndexMut<QueueId> for Family<S> {
     fn index_mut(&mut self, qid: QueueId) -> &mut Queue<S> {
-        self.get_queue_mut(qid).unwrap()
+        self.queue_mut(qid).unwrap()
     }
 }
 
-impl<S> Index<SubmitId> for Family<S> {
-    type Output = Submit<S>;
+impl<S> Index<SubmissionId> for Family<S> {
+    type Output = Submission<S>;
 
-    fn index(&self, sid: SubmitId) -> &Submit<S> {
-        self.get_submit(sid).unwrap()
+    fn index(&self, sid: SubmissionId) -> &Submission<S> {
+        self.submission(sid).unwrap()
     }
 }
 
-impl<S> IndexMut<SubmitId> for Family<S> {
-    fn index_mut(&mut self, sid: SubmitId) -> &mut Submit<S> {
-        self.get_submit_mut(sid).unwrap()
+impl<S> IndexMut<SubmissionId> for Family<S> {
+    fn index_mut(&mut self, sid: SubmissionId) -> &mut Submission<S> {
+        self.submission_mut(sid).unwrap()
     }
 }

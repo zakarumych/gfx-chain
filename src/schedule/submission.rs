@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 
 use hal::queue::QueueFamilyId;
 
@@ -8,17 +8,17 @@ use pass::PassId;
 
 use super::QueueId;
 
-/// Submit id.
+/// Submission id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SubmitId {
+pub struct SubmissionId {
     queue: QueueId,
     index: usize,
 }
 
-impl SubmitId {
+impl SubmissionId {
     /// Create new id from queue id and index.
     pub fn new(queue: QueueId, index: usize) -> Self {
-        SubmitId { queue, index }
+        SubmissionId { queue, index }
     }
 
     /// Get family id.
@@ -39,18 +39,28 @@ impl SubmitId {
 
 /// This type corresponds to commands that should be recorded into single primary command buffer.
 #[derive(Clone, Debug)]
-pub struct Submit<S> {
-    pub(crate) buffers: HashMap<Id<Buffer>, usize>,
-    pub(crate) images: HashMap<Id<Image>, usize>,
-    pub(crate) pass: PassId,
-    pub(crate) wait_factor: usize,
-    pub(crate) sync: S,
+pub struct Submission<S> {
+    buffers: HashMap<Id<Buffer>, usize>,
+    images: HashMap<Id<Image>, usize>,
+    pass: PassId,
+    wait_factor: usize,
+    sync: S,
 }
 
-impl<S> Submit<S> {
-    /// Create new submit with specified pass.
-    pub fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
-        Submit {
+impl<S> Submission<S> {
+    /// Get synchronization for `Submission`.
+    pub fn pass(&self) -> PassId {
+        self.pass
+    }
+
+    /// Get synchronization for `Submission`.
+    pub fn sync(&self) -> &S {
+        &self.sync
+    }
+
+    /// Create new submission with specified pass.
+    pub(crate) fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
+        Submission {
             buffers: HashMap::new(),
             images: HashMap::new(),
             pass,
@@ -59,9 +69,24 @@ impl<S> Submit<S> {
         }
     }
 
-    /// Set new synchronization to the `Submit`.
-    pub fn set_sync<T>(&self, sync: T) -> Submit<T> {
-        Submit {
+    /// Get wait factor for `Submission`
+    pub(crate) fn wait_factor(&self) -> usize {
+        self.wait_factor
+    }
+
+    /// Iterator over buffers
+    pub(crate) fn buffers(&self) -> HashMapIter<Id<Buffer>, usize> {
+        self.buffers.iter()
+    }
+
+    /// Iterator over images
+    pub(crate) fn images(&self) -> HashMapIter<Id<Image>, usize> {
+        self.images.iter()
+    }
+
+    /// Set new synchronization to the `Submission`.
+    pub(crate) fn set_sync<T>(&self, sync: T) -> Submission<T> {
+        Submission {
             buffers: self.buffers.clone(),
             images: self.images.clone(),
             pass: self.pass,
@@ -71,7 +96,7 @@ impl<S> Submit<S> {
     }
 }
 
-impl<S> Pick<Buffer> for Submit<S> {
+impl<S> Pick<Buffer> for Submission<S> {
     type Target = HashMap<Id<Buffer>, usize>;
 
     fn pick(&self) -> &HashMap<Id<Buffer>, usize> {
@@ -82,7 +107,7 @@ impl<S> Pick<Buffer> for Submit<S> {
     }
 }
 
-impl<S> Pick<Image> for Submit<S> {
+impl<S> Pick<Image> for Submission<S> {
     type Target = HashMap<Id<Image>, usize>;
 
     fn pick(&self) -> &HashMap<Id<Image>, usize> {

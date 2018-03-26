@@ -36,9 +36,6 @@ pub trait Resource: Copy + Debug + Eq + Ord + Hash {
 
     /// Sub-resource range.
     type Range: Clone;
-
-    /// Resource type index.
-    const ID: u32;
 }
 
 /// Buffer resource.
@@ -50,7 +47,6 @@ impl Resource for Buffer {
     type Layout = buffer::BufferLayout;
     type Usage = BufferUsage;
     type Range = Range<u64>;
-    const ID: u32 = 0;
 }
 
 /// Image resource.
@@ -62,7 +58,6 @@ impl Resource for Image {
     type Layout = ImageLayout;
     type Usage = ImageUsage;
     type Range = SubresourceRange;
-    const ID: u32 = 1;
 }
 
 /// Resource typed id
@@ -74,18 +69,10 @@ impl<R> Id<R> {
     pub fn new(index: u32) -> Self {
         Id(index, PhantomData)
     }
-}
 
-/// Resource id
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Uid(u32, u32);
-
-impl<R> From<Id<R>> for Uid
-where
-    R: Resource,
-{
-    fn from(id: Id<R>) -> Uid {
-        Uid(R::ID, id.0)
+    /// Get index
+    pub fn index(&self) -> u32 {
+        self.0
     }
 }
 

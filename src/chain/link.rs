@@ -1,238 +1,216 @@
-use std::ops::Range;
+use std::collections::hash_map::{Entry, HashMap, Iter as HashMapIter};
 
-use hal::command::CommandBuffer;
-use hal::memory::Dependencies;
 use hal::pso::PipelineStage;
-use hal::queue::{QueueFamilyId, Supports, Transfer};
+use hal::queue::QueueFamilyId;
 
-use resource::{Access, Layout, Resource};
-use queue::QueueId;
+use resource::{Resource, State};
+use schedule::{QueueId, SubmissionId};
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Acquire;
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Release;
-
-pub(super) trait Semantics {
-    fn src_dst(this: QueueFamilyId, other: QueueFamilyId) -> (QueueFamilyId, QueueFamilyId);
-}
-
-impl Semantics for Acquire {
-    fn src_dst(this: QueueFamilyId, other: QueueFamilyId) -> (QueueFamilyId, QueueFamilyId) {
-        (other, this)
-    }
-}
-
-impl Semantics for Release {
-    fn src_dst(this: QueueFamilyId, other: QueueFamilyId) -> (QueueFamilyId, QueueFamilyId) {
-        (this, other)
-    }
-}
-
+/// State of the link associated with queue.
+/// Contains submissions range, combined access and stages bits by submissions from the range.
 #[derive(Clone, Debug)]
-pub(super) enum LinkSync<A, L, S, M> {
-    /// No transition required.
-    None(M),
-
-    /// Pipeline barrier.
-    Barrier {
-        access: Range<A>,
-        layout: Range<L>,
-        stages: Range<PipelineStage>,
-    },
-
-    /// Signal / Wait for semaphore.
-    Semaphore { semaphore: S },
-
-    /// Signal / Wait for semaphore and insert barrier.
-    BarrierSemaphore {
-        access: Range<A>,
-        layout: Range<L>,
-        stages: Range<PipelineStage>,
-        semaphore: S,
-    },
-
-    /// Perform ownership transfer.
-    Transfer {
-        access: Range<A>,
-        layout: Range<L>,
-        stages: Range<PipelineStage>,
-        semaphore: S,
-        other: QueueId,
-    },
+pub(crate) struct LinkQueueState<R: Resource> {
+    first: usize,
+    last: usize,
+    access: R::Access,
+    stages: PipelineStage,
 }
 
-impl<A, L, S, M> LinkSync<A, L, S, M> {
-    pub(super) fn is_none(&self) -> bool {
-        match *self {
-            LinkSync::None(_) => true,
-            _ => false,
-        }
-    }
-}
-
-impl<A, L, S> LinkSync<A, L, S, Acquire> {
-    /// Report what semaphore should be waited before executing commands of the link.
-    pub(super) fn wait(&self) -> Option<&S> {
-        match *self {
-            LinkSync::None(_) | LinkSync::Barrier { .. } => None,
-            LinkSync::Semaphore { ref semaphore }
-            | LinkSync::BarrierSemaphore { ref semaphore, .. }
-            | LinkSync::Transfer { ref semaphore, .. } => Some(semaphore),
-        }
-    }
-}
-
-impl<A, L, S> LinkSync<A, L, S, Release> {
-    /// Report what semaphore should be signaled after executing commands of the link.
-    pub(super) fn signal(&self) -> Option<&S> {
-        match *self {
-            LinkSync::None(_) | LinkSync::Barrier { .. } => None,
-            LinkSync::Semaphore { ref semaphore }
-            | LinkSync::BarrierSemaphore { ref semaphore, .. }
-            | LinkSync::Transfer { ref semaphore, .. } => Some(semaphore),
-        }
-    }
-}
-
-impl<A, L, S, M> LinkSync<A, L, S, M>
+impl<R> LinkQueueState<R>
 where
-    A: Access,
-    L: Layout,
-    M: Semantics,
+    R: Resource,
 {
-    /// Insert barrier if required before recording commands for the link.
-    pub(super) fn barrier<R, C>(
-        &self,
-        this: QueueId,
-        commands: &mut CommandBuffer<R::Backend, C>,
-        resources: Option<&[(&R, R::Range)]>,
-    ) where
-        C: Supports<Transfer>,
-        R: Resource<Access = A, Layout = L>,
-    {
-        let (access, layout, stages, (src, dst)) = match *self {
-            LinkSync::None(_) | LinkSync::Semaphore { .. } => {
-                return;
+    fn new(sid: SubmissionId, state: State<R>) -> Self {
+        LinkQueueState {
+            first: sid.index(),
+            last: sid.index(),
+            access: state.access,
+            stages: state.stages,
+        }
+    }
+
+    fn push(&mut self, sid: SubmissionId, state: State<R>) {
+        assert!(sid.index() == self.last);
+        self.access |= state.access;
+        self.stages |= state.stages;
+        self.last = sid.index() + 1;
+    }
+
+    /// First submission index.
+    pub fn first(&self) -> usize {
+        self.first
+    }
+
+    /// Last submission index.
+    pub fn last(&self) -> usize {
+        self.last
+    }
+}
+
+/// This type defines what states resource are at some point in time when commands recorded into
+/// corresponding submissions are executed.
+/// Those commands doesn't required to perform actions with all access types declared by the link.
+/// But performing actions with access types not declared by the link is prohibited.
+#[derive(Clone, Debug)]
+pub struct Link<R: Resource> {
+    state: State<R>,
+    queues: HashMap<usize, LinkQueueState<R>>,
+    family: QueueFamilyId,
+}
+
+impl<R> Link<R>
+where
+    R: Resource,
+{
+    /// Create new link with first attached submission.
+    ///
+    /// # Parameters
+    ///
+    /// `state`     - state of the first submission.
+    /// `sid`       - id of the first submission.
+    ///
+    pub fn new(sid: SubmissionId, state: State<R>) -> Self {
+        use std::iter::once;
+        Link {
+            state,
+            queues: once((sid.queue().index(), LinkQueueState::new(sid, state))).collect(),
+            family: sid.family(),
+        }
+    }
+
+    /// Get queue family that owns the resource at the link.
+    /// All associated submissions must be from the same queue family.
+    pub fn family(&self) -> QueueFamilyId {
+        self.family
+    }
+
+    ///
+    pub fn access(&self) -> R::Access {
+        self.state.access
+    }
+
+    ///
+    pub fn layout(&self) -> R::Layout {
+        self.state.layout
+    }
+
+    ///
+    pub fn stages(&self) -> PipelineStage {
+        self.state.stages
+    }
+
+    /// Check if the link is associated with only one submission.
+    pub fn exclusive(&self) -> bool {
+        let mut values = self.queues.values();
+        let queue = values.next().unwrap();
+        values.next().is_none() && queue.first() == queue.last()
+    }
+
+    /// Check if the given state and submission are compatible with link.
+    /// If compatible then the submission can be associated with the link.
+    pub fn compatible(&self, sid: SubmissionId, state: State<R>) -> bool {
+        // If queue the same and states are compatible.
+        // And there is no later submission on the queue.
+        self.family == sid.family() && self.state.compatible(state)
+            && self.queues
+                .get(&sid.queue().index())
+                .map_or(true, |state| state.last() + 1 == sid.index())
+    }
+
+    /// Insert submission with specified state to the link.
+    /// It must be compatible.
+    /// Associating submission with the link will allow the submission
+    /// to be executed in parallel with other submissions associated with this link.
+    /// Unless other chains disallow.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if `state` and `sid` are not compatible.
+    /// E.g. `Link::compatible` didn't returned `true` for the arguments.
+    ///
+    pub fn insert_submission(&mut self, sid: SubmissionId, state: State<R>) {
+        assert_eq!(self.family, sid.family());
+        let state = self.state.merge(state);
+        match self.queues.entry(sid.queue().index()) {
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().push(sid, state);
             }
-            LinkSync::Barrier {
-                ref access,
-                ref layout,
-                ref stages,
-            } => (access, layout, stages, (this.family(), this.family())),
-            LinkSync::BarrierSemaphore {
-                ref access,
-                ref layout,
-                ref stages,
-                ..
-            } => (access, layout, stages, (this.family(), this.family())),
-            LinkSync::Transfer {
-                ref access,
-                ref layout,
-                ref stages,
-                other,
-                ..
-            } => (
-                access,
-                layout,
-                stages,
-                M::src_dst(this.family(), other.family()),
-            ),
+            Entry::Vacant(vacant) => {
+                vacant.insert(LinkQueueState::new(sid, state));
+            }
         };
-        if src != dst {
-            unimplemented!();
+        self.state = state;
+    }
+
+    /// Collect first submissions from all queues.
+    pub fn heads(&self) -> Vec<SubmissionId> {
+        self.queues
+            .iter()
+            .map(|(&index, queue)| SubmissionId::new(QueueId::new(self.family, index), queue.first()))
+            .collect()
+    }
+
+    /// Collect last submissions from all queues.
+    pub fn tails(&self) -> Vec<SubmissionId> {
+        self.queues
+            .iter()
+            .map(|(&index, queue)| SubmissionId::new(QueueId::new(self.family, index), queue.last()))
+            .collect()
+    }
+
+    /// Check if ownership transfer is required between those links.
+    pub fn transfer(&self, next: &Self) -> bool {
+        self.family != next.family
+    }
+
+    /// Get iterator over queue
+    pub(crate) fn queues(&self) -> QueuesIter<R> {
+        QueuesIter {
+            family: self.family,
+            iter: self.queues.iter(),
         }
-        match resources {
-            Some(resources) => {
-                commands.pipeline_barrier(
-                    stages.clone(),
-                    Dependencies::empty(),
-                    resources.iter().map(|&(resource, ref range)| {
-                        resource.barrier(access.clone(), layout.clone(), R::Range::clone(range))
-                    }),
-                );
-            }
-            None => {
-                assert_eq!(
-                    layout.start, layout.end,
-                    "Can't use big barrier if layout transition is required"
-                );
-                assert_eq!(
-                    src, dst,
-                    "Can't use big barrier if ownership transfer is required"
-                );
-                commands.pipeline_barrier(
-                    stages.clone(),
-                    Dependencies::empty(),
-                    Some(R::big_barrier(access.clone())),
-                );
-            }
+    }
+
+    ///
+    pub(crate) fn queue_state(&self, qid: QueueId) -> State<R> {
+        let queue = self.queue(qid).unwrap();
+        State {
+            access: queue.access,
+            layout: self.state.layout,
+            stages: queue.stages,
         }
+    }
+
+    pub(crate) fn queue(&self, qid: QueueId) -> Option<&LinkQueueState<R>> {
+        assert_eq!(self.family, qid.family());
+        self.queues.get(&qid.index())
     }
 }
 
-/// Link of the resource chain.
-/// Link corresponds to single rendering-pass or similar entity.
-/// Rendering pass is expected to use resources associated with chain only in ways specified in the link.
-#[derive(Clone, Debug)]
-pub struct Link<A, L, S, W> {
-    pub(super) queue: QueueId,
-    pub(super) stages: PipelineStage,
-    pub(super) access: A,
-    pub(super) layout: L,
-    pub(super) merged_access: A,
-    pub(super) merged_layout: L,
-    pub(super) merged_stages: PipelineStage,
-    pub(super) acquire: LinkSync<A, L, W, Acquire>,
-    pub(super) release: LinkSync<A, L, S, Release>,
+pub(crate) struct QueuesIter<'a, R: Resource + 'a> {
+    family: QueueFamilyId,
+    iter: HashMapIter<'a, usize, LinkQueueState<R>>,
 }
 
-impl<A, L, S, W> Link<A, L, S, W>
+impl<'a, R> Iterator for QueuesIter<'a, R>
 where
-    A: Access,
-    L: Layout,
+    R: Resource + 'a,
 {
-    /// Get allowed access type for the link.
-    pub fn access(&self) -> A {
-        self.access
+    type Item = (QueueId, &'a LinkQueueState<R>);
+
+    fn next(&mut self) -> Option<(QueueId, &'a LinkQueueState<R>)> {
+        self.iter
+            .next()
+            .map(|(&index, queue)| (QueueId::new(self.family, index), queue))
     }
 
-    /// Get resource layout for the link.
-    pub fn layout(&self) -> L {
-        self.layout
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
     }
+}
 
-    /// Record acquire barrier if required.
-    pub fn acquire<R, C>(
-        &self,
-        commands: &mut CommandBuffer<R::Backend, C>,
-        resources: Option<&[(&R, R::Range)]>,
-    ) where
-        R: Resource<Access = A, Layout = L>,
-        C: Supports<Transfer>,
-    {
-        self.acquire.barrier(self.queue, commands, resources);
-    }
-
-    /// Record release barrier if required.
-    pub fn release<R, C>(
-        &self,
-        commands: &mut CommandBuffer<R::Backend, C>,
-        resources: Option<&[(&R, R::Range)]>,
-    ) where
-        R: Resource<Access = A, Layout = L>,
-        C: Supports<Transfer>,
-    {
-        self.release.barrier(self.queue, commands, resources);
-    }
-
-    /// Get waiting token if required.
-    pub fn wait(&self) -> Option<&W> {
-        self.acquire.wait()
-    }
-
-    /// Get signaling token if required.
-    pub fn signal(&self) -> Option<&S> {
-        self.release.signal()
-    }
+impl<'a, R> ExactSizeIterator for QueuesIter<'a, R>
+where
+    R: Resource + 'a,
+{
 }

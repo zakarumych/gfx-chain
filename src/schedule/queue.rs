@@ -1,0 +1,188 @@
+use std::iter::{DoubleEndedIterator, Enumerate, ExactSizeIterator};
+use std::ops::{Index, IndexMut};
+use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
+
+use hal::queue::QueueFamilyId;
+
+use super::submission::{Submission, SubmissionId};
+
+/// Queue id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QueueId {
+    family: usize,
+    index: usize,
+}
+
+impl QueueId {
+    /// Create queue id from family id and index.
+    pub fn new(family: QueueFamilyId, index: usize) -> Self {
+        QueueId {
+            family: family.0,
+            index,
+        }
+    }
+
+    /// Get family id.
+    pub fn family(&self) -> QueueFamilyId {
+        QueueFamilyId(self.family)
+    }
+
+    /// Get index within the family.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+}
+
+/// Iterator over references to submissions in queue.
+#[derive(Debug, Clone)]
+pub struct Submissions<'a, S: 'a> {
+    qid: QueueId,
+    iter: Enumerate<SliceIter<'a, Submission<S>>>,
+}
+
+impl<'a, S> Iterator for Submissions<'a, S> {
+    type Item = (SubmissionId, &'a Submission<S>);
+
+    fn next(&mut self) -> Option<(SubmissionId, &'a Submission<S>)> {
+        self.iter
+            .next()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, S> DoubleEndedIterator for Submissions<'a, S> {
+    fn next_back(&mut self) -> Option<(SubmissionId, &'a Submission<S>)> {
+        self.iter
+            .next_back()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+}
+
+impl<'a, S> ExactSizeIterator for Submissions<'a, S> {}
+
+/// Iterator over mutable references to submissions in queue.
+#[derive(Debug)]
+pub struct SubmissionsMut<'a, S: 'a> {
+    qid: QueueId,
+    iter: Enumerate<SliceIterMut<'a, Submission<S>>>,
+}
+
+impl<'a, S> Iterator for SubmissionsMut<'a, S> {
+    type Item = (SubmissionId, &'a mut Submission<S>);
+
+    fn next(&mut self) -> Option<(SubmissionId, &'a mut Submission<S>)> {
+        self.iter
+            .next()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, S> DoubleEndedIterator for SubmissionsMut<'a, S> {
+    fn next_back(&mut self) -> Option<(SubmissionId, &'a mut Submission<S>)> {
+        self.iter
+            .next_back()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+}
+
+impl<'a, S> ExactSizeIterator for SubmissionsMut<'a, S> {}
+
+/// Instances of this type contains array of `Submission`s.
+/// Those submissions are expected to be submissionted in order.
+#[derive(Clone, Debug)]
+pub struct Queue<S> {
+    id: QueueId,
+    submissions: Vec<Submission<S>>,
+}
+
+impl<S> Queue<S> {
+    /// Create new queue with specified id.
+    pub fn new(id: QueueId) -> Self {
+        Queue {
+            id,
+            submissions: Vec::default(),
+        }
+    }
+
+    /// Iterate over references to all submissions.
+    pub fn iter(&self) -> Submissions<S> {
+        Submissions {
+            qid: self.id,
+            iter: self.submissions.iter().enumerate(),
+        }
+    }
+
+    /// Iterate over mutable references to all submissions.
+    pub fn iter_mut(&mut self) -> SubmissionsMut<S> {
+        SubmissionsMut {
+            qid: self.id,
+            iter: self.submissions.iter_mut().enumerate(),
+        }
+    }
+
+    /// Get the number of submissions in queue.
+    pub fn len(&self) -> usize {
+        self.submissions.len()
+    }
+
+    /// Get reference to `Submission` instance by id.
+    ///
+    /// # Panic
+    ///
+    /// This function will panic if requested submission isn't part of this queue.
+    ///
+    pub fn submission(&self, sid: SubmissionId) -> Option<&Submission<S>> {
+        assert_eq!(self.id, sid.queue());
+        self.submissions.get(sid.index())
+    }
+
+    /// Get mutable reference to `Submission` instance by id.
+    ///
+    /// # Panic
+    ///
+    /// This function will panic if requested submission isn't part of this queue.
+    ///
+    pub fn submission_mut(&mut self, sid: SubmissionId) -> Option<&mut Submission<S>> {
+        assert_eq!(self.id, sid.queue());
+        self.submissions.get_mut(sid.index())
+    }
+
+    /// Get reference to last `Submission` instance.
+    pub fn last_submission(&self) -> Option<&Submission<S>> {
+        self.submissions.last()
+    }
+
+    /// Get mutable reference to last `Submission` instance.
+    pub fn last_submission_mut(&mut self) -> Option<&mut Submission<S>> {
+        self.submissions.last_mut()
+    }
+
+    /// Add `Submission` instance to the end of queue.
+    /// Returns id of the added submission.
+    pub fn add_submission(&mut self, submission: Submission<S>) -> SubmissionId {
+        self.submissions.push(submission);
+        SubmissionId::new(self.id, self.submissions.len() - 1)
+    }
+}
+
+impl<S> Index<SubmissionId> for Queue<S> {
+    type Output = Submission<S>;
+
+    fn index(&self, sid: SubmissionId) -> &Submission<S> {
+        self.submission(sid).unwrap()
+    }
+}
+
+impl<S> IndexMut<SubmissionId> for Queue<S> {
+    fn index_mut(&mut self, sid: SubmissionId) -> &mut Submission<S> {
+        self.submission_mut(sid).unwrap()
+    }
+}

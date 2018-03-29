@@ -3,7 +3,7 @@ use std::ops::{BitOr, BitOrAssign};
 use hal::pso::PipelineStage;
 
 /// Access type combination
-pub trait Access: Debug + Copy + BitOr<Output = Self> + BitOrAssign {
+pub trait Access: Debug + Copy + BitOr<Output = Self> + BitOrAssign + Eq {
     /// Create empty combinations of access types.
     fn none() -> Self;
 

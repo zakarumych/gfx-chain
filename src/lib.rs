@@ -28,8 +28,7 @@ trait Pick<R> {
 }
 
 use pass::Pass;
-use collect::collect;
-use schedule::Schedule;
+use collect::{Chains, collect};
 use sync::{sync, Sync};
 
 /// Build synchronized schedule of the execution from passes descriptions.
@@ -40,11 +39,16 @@ use sync::{sync, Sync};
 /// `max_queues`    - function that returns maximum number of queues for specified family.
 /// `new_semaphore` - function to create new semaphore pair - (signal, wait).
 /// 
-pub fn build<F, Q, S, W>(passes: Vec<Pass>, max_queues: Q, new_semaphore: F) -> Schedule<Sync<S, W>>
+pub fn build<F, Q, S, W>(passes: Vec<Pass>, max_queues: Q, new_semaphore: F) -> Chains<Sync<S, W>>
 where
     Q: Fn(QueueFamilyId) -> usize,
     F: FnMut() -> (S, W),
 {
     let chains = collect(passes, max_queues);
-    sync(&chains, new_semaphore)
+    let schedule = sync(&chains, new_semaphore);
+    Chains {
+        schedule,
+        images: chains.images,
+        buffers: chains.buffers,
+    }
 }

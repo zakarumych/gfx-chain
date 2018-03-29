@@ -125,7 +125,7 @@ fn fitness<S>(
 ) -> (Fitness, QueueId) {
     // Find best queue for pass.
     pass.queue()
-        .map_or((0..max_queues), |queue| queue..queue + 1)
+        .map_or(0..max_queues, |queue| queue..queue + 1)
         .map(|index| {
             let qid = QueueId::new(pass.family(), index);
             let sid = SubmissionId::new(qid, schedule.queue(qid).map_or(0, |queue| queue.len()));

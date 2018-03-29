@@ -441,9 +441,8 @@ fn sync_submission_chain<R, S>(
     if queue.first() == sid.index() && link_index > 0 {
         // First of queue. Sync with prev.
         let ref prev = chain.links()[link_index - 1];
-        if prev.family() != this.family() {
+        if prev.family() != this.family() && this.access().is_read() {
             // Transfer ownership.
-
             // Find earliest submission from this chain.
             // It will acquire ownership.
             let this_earliest = earliest(this, schedule);
@@ -491,7 +490,7 @@ fn sync_submission_chain<R, S>(
                 ));
             }
         } else {
-            // Same family.
+            // Same family or content discarding.
             for tail in prev.tails() {
                 if tail.queue() != sid.queue() {
                     // Wait for tails on other queues.
@@ -517,7 +516,7 @@ fn sync_submission_chain<R, S>(
     if queue.last() == sid.index() && link_index + 1 < chain.links().len() {
         // Sync with next.
         let ref next = chain.links()[link_index + 1];
-        if next.family() != this.family() {
+        if next.family() != this.family() && next.access().is_read() {
             // Transfer ownership.
 
             // Find latest submission from this chain.
@@ -564,7 +563,7 @@ fn sync_submission_chain<R, S>(
                 )));
             }
         } else {
-            // Same family.
+            // Same family or content discarding.
             for head in next.heads() {
                 if head.queue() != sid.queue() {
                     // Signal to heads on other queues.
@@ -575,10 +574,12 @@ fn sync_submission_chain<R, S>(
                 } else if this.exclusive() {
                     // Insert barrier here.
                     // Next won't insert as this is exclusive.
-                    assert!(!next.exclusive());
                     sync.release
                         .pick_mut()
                         .insert(id, Barrier::new(next.queue_state(head.queue())..this_state));
+                } else {
+                    // Next will insert barrier.
+                    assert!(next.exclusive());
                 }
             }
         }

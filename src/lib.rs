@@ -13,8 +13,8 @@ extern crate gfx_hal as hal;
 
 use hal::queue::QueueFamilyId;
 
-mod chain;
-mod collect;
+pub mod chain;
+pub mod collect;
 pub mod pass;
 pub mod resource;
 pub mod schedule;

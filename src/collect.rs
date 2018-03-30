@@ -39,20 +39,10 @@ struct Fitness {
 
 /// Calculate automatic `Chains` for passes.
 /// This function tries to find most appropriate schedule for passes execution.
-pub fn collect<Q>(passes: Vec<Pass>, max_queues: Q) -> Chains
+pub fn collect<Q>(mut passes: Vec<Pass>, max_queues: Q) -> Chains
 where
     Q: Fn(QueueFamilyId) -> usize,
 {
-    // Indexed passes.
-    let mut passes = passes
-        .into_iter()
-        .enumerate()
-        .map(|(index, pass)| {
-            pass.dependencies().to_owned().sort();
-            (PassId(index), pass)
-        })
-        .collect::<Vec<_>>();
-
     // Track scheduled.
     let mut scheduled: Vec<PassId> = Vec::new();
 
@@ -71,8 +61,8 @@ where
         let (fitness, qid, index) = passes
             .iter()
             .enumerate()
-            .filter(|&(_, &(_, ref pass))| all_there(pass.dependencies(), &scheduled))
-            .map(|(index, &(_, ref pass))| {
+            .filter(|&(_, pass)| all_there(pass.dependencies(), &scheduled))
+            .map(|(index, pass)| {
                 let (fitness, qid) = fitness(
                     pass,
                     max_queues(pass.family()),
@@ -85,11 +75,10 @@ where
             .min()
             .unwrap();
 
-        let (index, pass) = passes.swap_remove(index);
-        scheduled.push(index);
+        let pass = passes.swap_remove(index);
+        scheduled.push(pass.id);
 
         schedule_pass(
-            index,
             pass,
             qid,
             fitness.wait_factor,
@@ -184,7 +173,6 @@ where
 }
 
 fn schedule_pass(
-    pid: PassId,
     pass: Pass,
     qid: QueueId,
     wait_factor: usize,
@@ -195,7 +183,7 @@ fn schedule_pass(
     assert_eq!(qid.family(), pass.family());
 
     let ref mut queue = schedule.ensure_queue(qid);
-    let sid = queue.add_submission(Submission::new(wait_factor, pid, Unsynchronized));
+    let sid = queue.add_submission(Submission::new(wait_factor, pass.id, Unsynchronized));
     let ref mut submission = queue[sid];
 
     for (&id, &state) in pass.buffers() {

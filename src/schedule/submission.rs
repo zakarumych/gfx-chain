@@ -58,6 +58,31 @@ impl<S> Submission<S> {
         &self.sync
     }
 
+    /// Get wait factor for `Submission`
+    pub fn wait_factor(&self) -> usize {
+        self.wait_factor
+    }
+
+    /// Iterator over buffers
+    pub fn buffers(&self) -> HashMapIter<Id<Buffer>, usize> {
+        self.buffers.iter()
+    }
+
+    /// Iterator over images
+    pub fn images(&self) -> HashMapIter<Id<Image>, usize> {
+        self.images.iter()
+    }
+
+    /// Get link index for buffer by id.
+    pub fn buffer(&self, id: Id<Buffer>) -> usize {
+        self.buffers[&id]
+    }
+
+    /// Get link index for image by id.
+    pub fn image(&self, id: Id<Image>) -> usize {
+        self.images[&id]
+    }
+
     /// Create new submission with specified pass.
     pub(crate) fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
         Submission {
@@ -67,21 +92,6 @@ impl<S> Submission<S> {
             wait_factor,
             sync,
         }
-    }
-
-    /// Get wait factor for `Submission`
-    pub(crate) fn wait_factor(&self) -> usize {
-        self.wait_factor
-    }
-
-    /// Iterator over buffers
-    pub(crate) fn buffers(&self) -> HashMapIter<Id<Buffer>, usize> {
-        self.buffers.iter()
-    }
-
-    /// Iterator over images
-    pub(crate) fn images(&self) -> HashMapIter<Id<Image>, usize> {
-        self.images.iter()
     }
 
     /// Set new synchronization to the `Submission`.

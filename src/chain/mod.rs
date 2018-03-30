@@ -45,6 +45,40 @@ where
         self.links.push(link);
         self.links.last_mut().unwrap()
     }
+
+    /// Get link by index.
+    pub fn link(&self, index: usize) -> &Link<R> {
+        &self.links[index]
+    }
+
+    /// Get link by index.
+    pub fn link_mut(&mut self, index: usize) -> &mut Link<R> {
+        &mut self.links[index]
+    }
+
+    /// Get link by index.
+    pub fn next_link(&self, index: usize) -> &Link<R> {
+        let index = (index + 1) % self.links.len();
+        self.link(index)
+    }
+
+    /// Get link by index.
+    pub fn next_link_mut(&mut self, index: usize) -> &mut Link<R> {
+        let index = (index + 1) % self.links.len();
+        self.link_mut(index)
+    }
+
+    /// Get link by index.
+    pub fn prev_link(&self, index: usize) -> &Link<R> {
+        let index = (index + self.links.len() - 1) % self.links.len();
+        self.link(index)
+    }
+
+    /// Get link by index.
+    pub fn prev_link_mut(&mut self, index: usize) -> &mut Link<R> {
+        let index = (index + self.links.len() - 1) % self.links.len();
+        self.link_mut(index)
+    }
 }
 
 /// Type alias for map of chains by id for buffers.

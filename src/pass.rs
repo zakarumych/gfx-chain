@@ -14,6 +14,9 @@ pub struct PassId(pub usize);
 /// Description of pass.
 #[derive(Clone, Debug)]
 pub struct Pass {
+    /// Id of the pass.
+    pub id: PassId,
+
     /// Family required to execute the pass.
     pub family: QueueFamilyId,
 

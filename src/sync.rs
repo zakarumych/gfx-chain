@@ -267,8 +267,10 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
 /// Both sides of synchronization for submission.
 pub struct Sync<S, W> {
     /// Acquire side of submission synchronization.
+    /// Synchronization commands from this side must be recorded before main commands of submission.
     pub acquire: Guard<S, W>,
     /// Release side of submission synchronization.
+    /// Synchronization commands from this side must be recorded after main commands of submission.
     pub release: Guard<S, W>,
 }
 

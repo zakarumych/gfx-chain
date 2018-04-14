@@ -1,4 +1,4 @@
-use hal::image::{Access as ImageAccess, ImageLayout, Usage as ImageUsage};
+use hal::image::{Access as ImageAccess, Layout as ImageLayout, Usage as ImageUsage};
 use hal::pso::PipelineStage;
 
 use resource::{Access, Layout, Usage};

@@ -12,5 +12,5 @@ license = "MIT/Apache-2.0"
 
 [dependencies]
 derivative = "1.0"
-gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "506ba0af0" }
+gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "7a3746885" }
 log = "0.4"

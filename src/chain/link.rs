@@ -30,10 +30,9 @@ where
     }
 
     fn push(&mut self, sid: SubmissionId, state: State<R>) {
-        assert!(sid.index() == self.last);
         self.access |= state.access;
         self.stages |= state.stages;
-        self.last = sid.index() + 1;
+        self.last = sid.index();
     }
 
     /// First submission index.
@@ -106,15 +105,16 @@ where
         values.next().is_none() && queue.first() == queue.last()
     }
 
+    /// Check if the link is associated with only one queue.
+    pub fn single_queue(&self) -> bool {
+        self.queues().len() == 1
+    }
+
     /// Check if the given state and submission are compatible with link.
     /// If compatible then the submission can be associated with the link.
     pub fn compatible(&self, sid: SubmissionId, state: State<R>) -> bool {
         // If queue the same and states are compatible.
-        // And there is no later submission on the queue.
         self.family == sid.family() && self.state.compatible(state)
-            && self.queues
-                .get(&sid.queue().index())
-                .map_or(true, |state| state.last() + 1 == sid.index())
     }
 
     /// Insert submission with specified state to the link.

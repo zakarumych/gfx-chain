@@ -66,7 +66,7 @@ impl<S> Family<S> {
         assert_eq!(self.id, qid.family());
         let len = self.queues.len();
         self.queues
-            .extend((len..qid.index() + 1).map(|_| Queue::new(qid)));
+            .extend((len..qid.index() + 1).map(|i| Queue::new(QueueId::new(qid.family(), i))));
         &mut self.queues[qid.index()]
     }
 

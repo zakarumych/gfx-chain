@@ -17,9 +17,11 @@ use resource::Id;
 use schedule::{QueueId, Schedule, Submission, SubmissionId};
 
 /// Placeholder for synchronization type.
+#[derive(Debug)]
 pub struct Unsynchronized;
 
 /// Result of pass scheduler.
+#[derive(Debug)]
 pub struct Chains<S = Unsynchronized> {
     /// Contains submissions for passes spread among queue schedule.
     pub schedule: Schedule<S>,
@@ -96,9 +98,8 @@ where
 }
 
 fn all_there(all: &[PassId], there: &[PassId]) -> bool {
-    let mut there = there.into_iter();
     for &a in all {
-        if there.find(|&&t| t == a).is_none() {
+        if there.iter().find(|&&t| t == a).is_none() {
             return false;
         }
     }

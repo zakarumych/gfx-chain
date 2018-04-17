@@ -217,6 +217,7 @@ pub type BufferBarriers = Barriers<Buffer>;
 pub type ImageBarriers = Barriers<Image>;
 
 /// Synchronization for submission at one side.
+#[derive(Debug)]
 pub struct Guard<S, W> {
     /// Points at other queues that must be waited before commands from the submission can be executed.
     pub wait: Vec<Wait<W>>,
@@ -265,6 +266,7 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
 }
 
 /// Both sides of synchronization for submission.
+#[derive(Debug)]
 pub struct Sync<S, W> {
     /// Acquire side of submission synchronization.
     /// Synchronization commands from this side must be recorded before main commands of submission.
@@ -385,8 +387,8 @@ where
             assert_eq!(sid, result.ensure_queue(sid.queue()).add_submission(submission.set_sync(sync)));
         }
 
-    assert!(signals.is_empty());
-    assert!(waits.is_empty());
+    assert!(signals.values().all(|x| x.is_none()));
+    assert!(waits.values().all(|x| x.is_none()));
 
     result
 }
@@ -503,10 +505,12 @@ fn sync_submission_chain<R, S>(
                         ),
                         this_state.stages,
                     ));
-                } else if !prev.exclusive() {
+                } else if !prev.single_queue() {
                     // Insert barrier here.
                     // Prev won't insert as it isn't exclusive.
-                    assert!(this.exclusive());
+                    assert!(this.single_queue(),
+                            "Barriers cannot currently be inserted between links that both \
+                             involve more than one queue.");
                     sync.acquire
                         .pick_mut()
                         .insert(id, Barrier::new(prev.queue_state(tail.queue())..this_state));
@@ -573,15 +577,17 @@ fn sync_submission_chain<R, S>(
                         id,
                         Point::new(sid, Side::Release)..Point::new(head, Side::Acquire),
                     )));
-                } else if this.exclusive() {
+                } else if this.single_queue() {
                     // Insert barrier here.
                     // Next won't insert as this is exclusive.
                     sync.release
                         .pick_mut()
-                        .insert(id, Barrier::new(next.queue_state(head.queue())..this_state));
+                        .insert(id, Barrier::new(this_state..next.queue_state(head.queue())));
                 } else {
                     // Next will insert barrier.
-                    assert!(next.exclusive());
+                    assert!(next.single_queue(),
+                            "Barriers cannot currently be inserted between links that both \
+                             involve more than one queue.");
                 }
             }
         }

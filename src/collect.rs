@@ -20,6 +20,7 @@ use schedule::{QueueId, Schedule, Submission, SubmissionId};
 pub struct Unsynchronized;
 
 /// Result of pass scheduler.
+#[derive(Debug)]
 pub struct Chains<S = Unsynchronized> {
     /// Contains submissions for passes spread among queue schedule.
     pub schedule: Schedule<S>,

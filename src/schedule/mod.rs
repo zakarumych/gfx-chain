@@ -22,6 +22,7 @@ pub use self::submission::{Submission, SubmissionId};
 pub use self::queue::{Queue, QueueId, Submissions, SubmissionsMut};
 
 /// All schedule on which passes were scheduled.
+#[derive(Debug)]
 pub struct Schedule<S> {
     map: HashMap<QueueFamilyId, Family<S>>,
 }

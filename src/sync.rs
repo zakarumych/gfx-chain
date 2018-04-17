@@ -217,6 +217,7 @@ pub type BufferBarriers = Barriers<Buffer>;
 pub type ImageBarriers = Barriers<Image>;
 
 /// Synchronization for submission at one side.
+#[derive(Debug)]
 pub struct Guard<S, W> {
     /// Points at other queues that must be waited before commands from the submission can be executed.
     pub wait: Vec<Wait<W>>,
@@ -265,6 +266,7 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
 }
 
 /// Both sides of synchronization for submission.
+#[derive(Debug)]
 pub struct Sync<S, W> {
     /// Acquire side of submission synchronization.
     /// Synchronization commands from this side must be recorded before main commands of submission.

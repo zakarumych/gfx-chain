@@ -387,8 +387,8 @@ where
             assert_eq!(sid, result.ensure_queue(sid.queue()).add_submission(submission.set_sync(sync)));
         }
 
-    assert!(signals.is_empty());
-    assert!(waits.is_empty());
+    assert!(signals.values().all(|x| x.is_none()));
+    assert!(waits.values().all(|x| x.is_none()));
 
     result
 }

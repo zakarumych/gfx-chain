@@ -582,7 +582,7 @@ fn sync_submission_chain<R, S>(
                     // Next won't insert as this is exclusive.
                     sync.release
                         .pick_mut()
-                        .insert(id, Barrier::new(next.queue_state(head.queue())..this_state));
+                        .insert(id, Barrier::new(this_state..next.queue_state(head.queue())));
                 } else {
                     // Next will insert barrier.
                     assert!(next.single_queue(),

@@ -30,7 +30,6 @@ where
     }
 
     fn push(&mut self, sid: SubmissionId, state: State<R>) {
-        assert!(sid.index() == self.last + 1);
         self.access |= state.access;
         self.stages |= state.stages;
         self.last = sid.index();
@@ -115,11 +114,7 @@ where
     /// If compatible then the submission can be associated with the link.
     pub fn compatible(&self, sid: SubmissionId, state: State<R>) -> bool {
         // If queue the same and states are compatible.
-        // And there is no later submission on the queue.
         self.family == sid.family() && self.state.compatible(state)
-            && self.queues
-                .get(&sid.queue().index())
-                .map_or(true, |state| state.last() + 1 == sid.index())
     }
 
     /// Insert submission with specified state to the link.

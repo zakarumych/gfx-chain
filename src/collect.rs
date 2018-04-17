@@ -97,9 +97,8 @@ where
 }
 
 fn all_there(all: &[PassId], there: &[PassId]) -> bool {
-    let mut there = there.into_iter();
     for &a in all {
-        if there.find(|&&t| t == a).is_none() {
+        if there.iter().find(|&&t| t == a).is_none() {
             return false;
         }
     }

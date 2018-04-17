@@ -30,10 +30,10 @@ where
     }
 
     fn push(&mut self, sid: SubmissionId, state: State<R>) {
-        assert!(sid.index() == self.last);
+        assert!(sid.index() == self.last + 1);
         self.access |= state.access;
         self.stages |= state.stages;
-        self.last = sid.index() + 1;
+        self.last = sid.index();
     }
 
     /// First submission index.

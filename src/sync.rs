@@ -505,10 +505,12 @@ fn sync_submission_chain<R, S>(
                         ),
                         this_state.stages,
                     ));
-                } else if !prev.exclusive() {
+                } else if !prev.single_queue() {
                     // Insert barrier here.
                     // Prev won't insert as it isn't exclusive.
-                    assert!(this.exclusive());
+                    assert!(this.single_queue(),
+                            "Barriers cannot currently be inserted between links that both \
+                             involve more than one queue.");
                     sync.acquire
                         .pick_mut()
                         .insert(id, Barrier::new(prev.queue_state(tail.queue())..this_state));
@@ -575,7 +577,7 @@ fn sync_submission_chain<R, S>(
                         id,
                         Point::new(sid, Side::Release)..Point::new(head, Side::Acquire),
                     )));
-                } else if this.exclusive() {
+                } else if this.single_queue() {
                     // Insert barrier here.
                     // Next won't insert as this is exclusive.
                     sync.release
@@ -583,7 +585,9 @@ fn sync_submission_chain<R, S>(
                         .insert(id, Barrier::new(next.queue_state(head.queue())..this_state));
                 } else {
                     // Next will insert barrier.
-                    assert!(next.exclusive());
+                    assert!(next.single_queue(),
+                            "Barriers cannot currently be inserted between links that both \
+                             involve more than one queue.");
                 }
             }
         }

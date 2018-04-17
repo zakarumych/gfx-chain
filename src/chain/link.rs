@@ -106,6 +106,11 @@ where
         values.next().is_none() && queue.first() == queue.last()
     }
 
+    /// Check if the link is associated with only one queue.
+    pub fn single_queue(&self) -> bool {
+        self.queues().len() == 1
+    }
+
     /// Check if the given state and submission are compatible with link.
     /// If compatible then the submission can be associated with the link.
     pub fn compatible(&self, sid: SubmissionId, state: State<R>) -> bool {

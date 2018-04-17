@@ -17,6 +17,7 @@ use resource::Id;
 use schedule::{QueueId, Schedule, Submission, SubmissionId};
 
 /// Placeholder for synchronization type.
+#[derive(Debug)]
 pub struct Unsynchronized;
 
 /// Result of pass scheduler.

@@ -4,9 +4,10 @@ extern crate gfx_chain;
 extern crate rand;
 
 use clap::{Arg, App, SubCommand};
-use gfx_chain::build;
+use gfx_chain::collect::collect;
 use gfx_chain::pass::{Pass, PassId};
 use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource};
+use gfx_chain::sync::sync;
 use hal::buffer::{Access as BufferAccess};
 use hal::image::{Access as ImageAccess, Layout as ImageLayout};
 use hal::pso::PipelineStage;
@@ -228,19 +229,20 @@ fn test_run(seed: u64, is_test: bool) -> usize {
     rng.shuffle(&mut passes);
 
     catch_unwind(AssertUnwindSafe(|| {
+        let chains = collect(passes, |QueueFamilyId(id)| max_queues[id]);
+        if is_test {
+            println!("Unsynched chains: {:#?}", chains);
+        }
+
         let mut semaphore_id = 0;
-        let chains = build(
-            passes,
-            |QueueFamilyId(id)| max_queues[id],
-            || {
-                let id = semaphore_id;
-                semaphore_id += 1;
-                (id, id)
-            }
-        );
+        let schedule = sync(&chains, || {
+            let id = semaphore_id;
+            semaphore_id += 1;
+            (id, id)
+        });
 
         if is_test {
-            println!("Schedule: {:#?}", chains.schedule);
+            println!("Schedule: {:#?}", schedule);
             println!("Semaphore count: {}", semaphore_id);
         }
     })).ok();

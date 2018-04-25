@@ -16,6 +16,7 @@ use rand::{Rng, SeedableRng, OsRng, Isaac64Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, set_hook, AssertUnwindSafe};
+use std::time::{Instant, Duration};
 
 type DefaultRng = Isaac64Rng;
 
@@ -176,7 +177,13 @@ fn take_panic_info() -> Option<Option<String>> {
     unsafe { PANIC_INFO.take() }
 }
 
-fn test_run(seed: u64, is_test: bool) -> usize {
+#[derive(Copy, Clone)]
+struct BenchParams {
+    family_count: usize, queues_per_family: usize,
+    buffer_count: u32, image_count: u32, submit_count: usize,
+}
+
+fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Duration) {
     if is_test {
         println!("Seed: {}", seed);
     }
@@ -185,10 +192,15 @@ fn test_run(seed: u64, is_test: bool) -> usize {
     rng.reseed(&[seed]);
     let rng = &mut rng;
 
-    let family_count = gen_inclusive_prefer_low(rng, 1, 4);
-    let buffer_count = gen_inclusive_u32(rng, 0, 10);
-    let image_count = gen_inclusive_u32(rng, 0, 10);
-    let submit_count = gen_inclusive(rng, 1, 25);
+    let (family_count, buffer_count, image_count, submit_count) = if let Some(bench) = bench {
+        (bench.family_count, bench.buffer_count, bench.image_count, bench.submit_count)
+    } else {
+        (gen_inclusive_prefer_low(rng, 1, 4),
+         gen_inclusive_u32(rng, 0, 10),
+         gen_inclusive_u32(rng, 0, 10),
+         gen_inclusive(rng, 1, 25))
+    };
+
     if is_test {
         println!("Creating test case with {} families, {} buffers, {} images, and {} submissions.",
                  family_count, buffer_count, image_count, submit_count);
@@ -196,7 +208,11 @@ fn test_run(seed: u64, is_test: bool) -> usize {
 
     let mut max_queues = Vec::new();
     for _ in 0..family_count {
-        max_queues.push(gen_inclusive_prefer_low(rng, 1, 5));
+        if let Some(bench) = bench {
+            max_queues.push(bench.queues_per_family)
+        } else {
+            max_queues.push(gen_inclusive_prefer_low(rng, 1, 5));
+        }
     }
     if is_test {
         println!("Max queues for families: {:?}", max_queues);
@@ -228,6 +244,7 @@ fn test_run(seed: u64, is_test: bool) -> usize {
     }
     rng.shuffle(&mut passes);
 
+    let now = Instant::now();
     catch_unwind(AssertUnwindSafe(|| {
         let chains = collect(passes, |QueueFamilyId(id)| max_queues[id]);
         if is_test {
@@ -246,6 +263,7 @@ fn test_run(seed: u64, is_test: bool) -> usize {
             println!("Semaphore count: {}", semaphore_id);
         }
     })).ok();
+    let duration = Instant::now().duration_since(now);
 
     let mut queue_count = 0;
     for &family in &used_families {
@@ -254,7 +272,29 @@ fn test_run(seed: u64, is_test: bool) -> usize {
 
     let queue_score = (used_families.len() - 1) * 10 + (queue_count - 1) as usize;
     let object_score = submit_count + used_buffers.len() + used_images.len();
-    queue_score * 100 + object_score * 10 + pass_complexity
+    (queue_score * 100 + object_score * 10 + pass_complexity, duration)
+}
+fn run_bench(os_rng: &mut OsRng, bench: &str, params: BenchParams) {
+    let now = Instant::now();
+    let mut total_ms: f64 = 0.0;
+    let mut total_ms_sq: f64 = 0.0;
+    let mut iters = 0;
+    while Instant::now().duration_since(now).as_secs() <= 3 {
+        let seed = os_rng.next_u64();
+        let (_, run_time) = test_run(seed, false, Some(params));
+        let ms = run_time.subsec_nanos() as f64 / 1000000.0 + run_time.as_secs() as f64 * 1000.0;
+        total_ms += ms;
+        total_ms_sq += ms * ms;
+        iters += 1;
+    }
+
+    let mean_ms = total_ms / iters as f64;
+    let variance_ms = (total_ms_sq / iters as f64) - mean_ms * mean_ms;
+    let std_ms = variance_ms.abs().sqrt();
+    println!("{}: {:-6} iters ran in average {:.3} ± {:.3} ms ({:.2}% ± {:.2}% of 16.6 ms)",
+             bench, iters,
+             mean_ms, std_ms,
+             mean_ms / 16.6 * 100.0, std_ms / 16.6 * 100.0);
 }
 
 fn main() {
@@ -263,8 +303,10 @@ fn main() {
                                        .about("Tests a random chain, printing all results.")
                                        .arg(Arg::with_name("SEED")
                                             .help("optional fixed seed").index(1)))
+                           .subcommand(SubCommand::with_name("bench")
+                                       .about("Benchmarks large random chains."))
                            .subcommand(SubCommand::with_name("fuzz")
-                                       .about("Tests random chains, to find panicing cases."));
+                                       .about("Tests random chains, to find panicking cases."));
     let matches = app.clone().get_matches();
 
     let mut os_rng = OsRng::new().unwrap();
@@ -273,10 +315,30 @@ fn main() {
         match matches.value_of("SEED") {
             Some(seed) => {
                 let seed = seed.parse::<u64>().expect("seed is not a number!");
-                test_run(seed, true);
+                test_run(seed, true, None);
             }
             None => {
-                test_run(os_rng.next_u64(), true);
+                test_run(os_rng.next_u64(), true, None);
+            }
+        }
+        return
+    }
+    if let Some(_) = matches.subcommand_matches("bench") {
+        for &(load_name, resc_count, submit_count) in &[
+            ("tiny  ", 2, 10),
+            ("small ", 10, 50),
+            ("medium", 15, 150),
+            ("large ", 50, 1000),
+            ("huge  ", 50, 1500),
+        ] {
+            for &(queue_name, queue_count) in &[
+                ("single-queue", 1),
+                ("multi-queue ", 3)
+            ] {
+                run_bench(&mut os_rng, &format!("{} + {}", load_name, queue_name), BenchParams {
+                    family_count: queue_count, queues_per_family: queue_count,
+                    buffer_count: resc_count, image_count: resc_count, submit_count,
+                });
             }
         }
         return
@@ -286,7 +348,7 @@ fn main() {
         let mut simplest_examples = HashMap::new();
         loop {
             let seed = os_rng.next_u64();
-            let example_complexity = test_run(seed, false);
+            let (example_complexity, _) = test_run(seed, false, None);
             match take_panic_info() {
                 Some(Some(location)) => {
                     if simplest_examples.contains_key(&location) {

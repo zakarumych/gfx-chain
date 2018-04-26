@@ -300,14 +300,14 @@ impl<S, W> SyncData<S, W> {
             acquire: Guard {
                 wait: self.acquire.wait,
                 signal: self.acquire.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
-                buffers: self.acquire.buffers.clone(),
-                images: self.acquire.images.clone(),
+                buffers: self.acquire.buffers,
+                images: self.acquire.images,
             },
             release: Guard {
                 wait: self.release.wait,
                 signal: self.release.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
-                buffers: self.release.buffers.clone(),
-                images: self.release.images.clone(),
+                buffers: self.release.buffers,
+                images: self.release.images,
             },
         }
     }
@@ -320,14 +320,14 @@ impl<S, W> SyncData<S, W> {
             acquire: Guard {
                 wait: self.acquire.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
                 signal: self.acquire.signal,
-                buffers: self.acquire.buffers.clone(),
-                images: self.acquire.images.clone(),
+                buffers: self.acquire.buffers,
+                images: self.acquire.images,
             },
             release: Guard {
                 wait: self.release.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
                 signal: self.release.signal,
-                buffers: self.release.buffers.clone(),
-                images: self.release.images.clone(),
+                buffers: self.release.buffers,
+                images: self.release.images,
             },
         }
     }

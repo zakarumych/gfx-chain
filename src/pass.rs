@@ -8,7 +8,7 @@ use hal::queue::QueueFamilyId;
 use resource::{Buffer, Id, Image, State, Resource};
 
 /// Id of the pass.
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub struct PassId(pub usize);
 
 /// State in which pass uses resource and usage flags.

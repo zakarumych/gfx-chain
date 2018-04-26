@@ -128,7 +128,7 @@ impl<S> DoubleEndedIterator for QueueIntoIter<S> {
 impl<S> ExactSizeIterator for QueueIntoIter<S> {}
 
 /// Instances of this type contains array of `Submission`s.
-/// Those submissions are expected to be submissionted in order.
+/// Those submissions are expected to be submitted in order.
 #[derive(Clone, Debug)]
 pub struct Queue<S> {
     id: QueueId,

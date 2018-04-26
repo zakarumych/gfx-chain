@@ -357,10 +357,9 @@ pub fn sync<F, S, W>(
     let mut signals: HashMap<Semaphore, Option<S>> = HashMap::new();
     let mut waits: HashMap<Semaphore, Option<W>> = HashMap::new();
 
-    for (sid, submission) in schedule
-        .iter()
-        .flat_map(|family| family.iter())
-        .flat_map(|queue| queue.iter()) {
+    for queue in schedule.iter().flat_map(|family| family.iter()) {
+        let new_queue = result.ensure_queue(queue.id());
+        for (sid, submission) in queue.iter() {
             let sync = sync.remove(&sid).unwrap();
             let sync = sync.convert_signal(|semaphore| {
                 match signals.get_mut(&semaphore) {
@@ -386,8 +385,9 @@ pub fn sync<F, S, W>(
                     }
                 }
             });
-            assert_eq!(sid, result.ensure_queue(sid.queue()).add_submission(submission.set_sync(sync)));
+            assert_eq!(sid, new_queue.add_submission(submission.set_sync(sync)));
         }
+    }
 
     assert!(signals.values().all(|x| x.is_none()));
     assert!(waits.values().all(|x| x.is_none()));

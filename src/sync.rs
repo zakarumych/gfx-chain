@@ -98,11 +98,6 @@ impl Semaphore {
             points,
         }
     }
-
-    /// Point for which to signal.
-    fn points(&self) -> Range<Point> {
-        self.points.clone()
-    }
 }
 
 /// Semaphore signal info.
@@ -617,86 +612,65 @@ fn sync_submission<S>(
     sync
 }
 
-fn optimize_submission(sid: SubmissionId, sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>) {
-    use std::mem::replace;
-
-    // Take all waits
-    let mut acquire_wait = replace(&mut sync.get_mut(&sid).unwrap().acquire.wait, Vec::new());
-    acquire_wait.sort_by_key(|wait| {
-        assert_eq!(sid, wait.0.points().end.sid);
-        (
-            wait.stage(),
-            usize::max_value() - wait.0.points().start.sid.index(),
-        )
-    });
-
-    let mut release_wait = replace(&mut sync.get_mut(&sid).unwrap().release.wait, Vec::new());
-    release_wait.sort_by_key(|wait| {
-        assert_eq!(sid, wait.0.points().end.sid);
-        (
-            wait.stage(),
-            usize::max_value() - wait.0.points().start.sid.index(),
-        )
-    });
-
-    // Collect them. Mark the side.
-    let both_side_wait: Vec<_> = acquire_wait
-        .into_iter()
-        .map(|wait| (Side::Acquire, wait))
-        .chain(release_wait.into_iter().map(|wait| (Side::Release, wait)))
-        .collect();
-    let mut both_side_wait = both_side_wait.into_iter();
-
-    // Collect good waits here.
-    let mut result = Vec::new();
-
-    // Iterate from the back.
-    while let Some((side, wait)) = both_side_wait.next_back() {
-        // Check all earlier waits.
-        // This includes all waits from earlier stages.
-        // All waits from acquire side are before waits from release side.
-        // Also all waits from earlier submissions.
-        let redundant = both_side_wait
-            .as_slice()
-            .iter()
-            .rev()
-            .map(|&(_, ref wait)| wait)
-            .chain(
-                (0..sid.index())
-                    .rev()
-                    .filter_map(|index| sync.get(&SubmissionId::new(sid.queue(), index)))
-                    .flat_map(|sync| sync.release.wait.iter().chain(sync.acquire.wait.iter())),
-            )
-            .any(|earlier| {
-                // If waits for non-earlier point.
-                earlier.0.points().start >= wait.0.points().start
-            });
-
-        if redundant {
-            // Delete signal as well.
-            let ref mut signal = sync.get_mut(&wait.0.points().start.sid)
-                .unwrap()
-                .get_mut(wait.0.points().start.side)
-                .signal;
-            let index = signal.iter().position(|signal| signal.0 == wait.0).unwrap();
-            signal.remove(index);
-        } else {
-            // Keep it.
-            result.push((side, wait));
+fn optimize_side(
+    guard: &mut Guard<Semaphore, Semaphore>,
+    to_remove: &mut Vec<Semaphore>,
+    found: &mut HashMap<QueueId, (usize, Side)>,
+) {
+    guard.wait.sort_unstable_by_key(
+        |wait| (wait.stage(),
+                wait.semaphore().points.end.sid.index())
+    );
+    guard.wait.retain(|wait| {
+        let start = wait.semaphore().points.start;
+        let pos = (start.sid.index(), start.side);
+        if let Some(synched_to) = found.get_mut(&start.sid.queue()) {
+            if *synched_to >= pos {
+                to_remove.push(wait.semaphore().clone());
+                return false
+            } else {
+                *synched_to = pos;
+                return true
+            }
         }
+
+        found.insert(start.sid.queue(), pos);
+        true
+    });
+}
+
+fn optimize_submission(
+    sid: SubmissionId,
+    found: &mut HashMap<QueueId, (usize, Side)>,
+    sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>,
+) {
+    let mut to_remove = Vec::new();
+
+    {
+        let sync_data = sync.get_mut(&sid).unwrap();
+        optimize_side(&mut sync_data.acquire, &mut to_remove, found);
+        optimize_side(&mut sync_data.release, &mut to_remove, found);
     }
 
-    // Return all necessary
-    for (side, wait) in result {
-        sync.get_mut(&sid).unwrap().get_mut(side).wait.push(wait);
+    for semaphore in to_remove {
+        // Delete signal as well.
+        let ref mut signal = sync.get_mut(&semaphore.points.start.sid)
+            .unwrap()
+            .get_mut(semaphore.points.start.side)
+            .signal;
+        let index = signal.iter().position(|signal| signal.0 == semaphore).unwrap();
+        signal.swap_remove(index);
     }
 }
 
-fn optimize<S>(schedule: &Schedule<S>, sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>) {
+fn optimize<S>(
+    schedule: &Schedule<S>,
+    sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>,
+) {
     for queue in schedule.iter().flat_map(|family| family.iter()) {
-        let mut submissions = queue.iter();
-        while let Some((sid, _)) = submissions.next_back() {
-            optimize_submission(sid, sync);
+        let mut found = HashMap::new();
+        for (sid, _) in queue.iter() {
+            optimize_submission(sid, &mut found, sync);
         }
     }
 }

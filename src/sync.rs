@@ -10,7 +10,7 @@ use hal::pso::PipelineStage;
 
 use Pick;
 use chain::{BufferChains, Chain, ImageChains, Link};
-use collect::Chains;
+use collect::{Chains, Unsynchronized};
 use resource::{Access, Buffer, Id, Image, Resource, State};
 use schedule::{QueueId, Schedule, Submission, SubmissionId};
 
@@ -267,7 +267,7 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
 
 /// Both sides of synchronization for submission.
 #[derive(Clone, Debug)]
-pub struct Sync<S, W> {
+pub struct SyncData<S, W> {
     /// Acquire side of submission synchronization.
     /// Synchronization commands from this side must be recorded before main commands of submission.
     pub acquire: Guard<S, W>,
@@ -276,9 +276,9 @@ pub struct Sync<S, W> {
     pub release: Guard<S, W>,
 }
 
-impl<S, W> Sync<S, W> {
+impl<S, W> SyncData<S, W> {
     fn new() -> Self {
-        Sync {
+        SyncData {
             acquire: Guard::new(),
             release: Guard::new(),
         }
@@ -292,11 +292,11 @@ impl<S, W> Sync<S, W> {
         }
     }
 
-    fn convert_signal<F, T>(self, mut f: F) -> Sync<T, W>
+    fn convert_signal<F, T>(self, mut f: F) -> SyncData<T, W>
     where
         F: FnMut(S) -> T,
     {
-        Sync {
+        SyncData {
             acquire: Guard {
                 wait: self.acquire.wait,
                 signal: self.acquire.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
@@ -312,11 +312,11 @@ impl<S, W> Sync<S, W> {
         }
     }
 
-    fn convert_wait<F, T>(self, mut f: F) -> Sync<S, T>
+    fn convert_wait<F, T>(self, mut f: F) -> SyncData<S, T>
     where
         F: FnMut(W) -> T,
     {
-        Sync {
+        SyncData {
             acquire: Guard {
                 wait: self.acquire.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
                 signal: self.acquire.signal,
@@ -334,8 +334,10 @@ impl<S, W> Sync<S, W> {
 }
 
 /// Find required synchronization for all submissions in `Chains`.
-pub fn sync<F, S, W>(chains: &Chains, mut new_semaphore: F) -> Schedule<Sync<S, W>>
-where
+pub fn sync<F, S, W>(
+    chains: &Chains<Unsynchronized>,
+    mut new_semaphore: F,
+) -> Schedule<SyncData<S, W>> where
     F: FnMut() -> (S, W),
 {
     let ref schedule = chains.schedule;
@@ -428,7 +430,7 @@ fn sync_submission_chain<R, S>(
     id: Id<R>,
     chain: &Chain<R>,
     schedule: &Schedule<S>,
-    sync: &mut Sync<Semaphore, Semaphore>,
+    sync: &mut SyncData<Semaphore, Semaphore>,
 ) where
     R: Resource,
     Id<R>: Into<Uid>,
@@ -600,8 +602,8 @@ fn sync_submission<S>(
     buffers: &BufferChains,
     images: &ImageChains,
     schedule: &Schedule<S>,
-) -> Sync<Semaphore, Semaphore> {
-    let mut sync = Sync::new();
+) -> SyncData<Semaphore, Semaphore> {
+    let mut sync = SyncData::new();
     for (&id, &index) in submission.buffers() {
         let ref chain = buffers[&id];
         sync_submission_chain(sid, submission, index, id, chain, schedule, &mut sync);
@@ -615,7 +617,7 @@ fn sync_submission<S>(
     sync
 }
 
-fn optimize_submission(sid: SubmissionId, sync: &mut HashMap<SubmissionId, Sync<Semaphore, Semaphore>>) {
+fn optimize_submission(sid: SubmissionId, sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>) {
     use std::mem::replace;
 
     // Take all waits
@@ -690,7 +692,7 @@ fn optimize_submission(sid: SubmissionId, sync: &mut HashMap<SubmissionId, Sync<
     }
 }
 
-fn optimize<S>(schedule: &Schedule<S>, sync: &mut HashMap<SubmissionId, Sync<Semaphore, Semaphore>>) {
+fn optimize<S>(schedule: &Schedule<S>, sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>) {
     for queue in schedule.iter().flat_map(|family| family.iter()) {
         let mut submissions = queue.iter();
         while let Some((sid, _)) = submissions.next_back() {

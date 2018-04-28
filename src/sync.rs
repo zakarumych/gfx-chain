@@ -6,6 +6,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::{Range, RangeFrom, RangeTo};
 
+use hal::Backend;
+use hal::command::CommandBuffer;
+use hal::queue::{Submission as HalSubmission, Supports, Transfer};
 use hal::pso::PipelineStage;
 
 use Pick;
@@ -107,7 +110,7 @@ impl Semaphore {
 
 /// Semaphore signal info.
 /// There must be paired wait.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Signal<S>(S);
 
 impl<S> Signal<S> {
@@ -126,7 +129,7 @@ impl<S> Signal<S> {
 
 /// Semaphore wait info.
 /// There must be paired signal.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Wait<S>(S, PipelineStage);
 
 impl<S> Wait<S> {
@@ -217,7 +220,7 @@ pub type BufferBarriers = Barriers<Buffer>;
 pub type ImageBarriers = Barriers<Image>;
 
 /// Synchronization for submission at one side.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Guard<S, W> {
     /// Points at other queues that must be waited before commands from the submission can be executed.
     pub wait: Vec<Wait<W>>,
@@ -266,7 +269,7 @@ impl<S, W> Pick<Buffer> for Guard<S, W> {
 }
 
 /// Both sides of synchronization for submission.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Sync<S, W> {
     /// Acquire side of submission synchronization.
     /// Synchronization commands from this side must be recorded before main commands of submission.

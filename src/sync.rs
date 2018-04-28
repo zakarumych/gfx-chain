@@ -360,7 +360,7 @@ pub fn sync<F, S, W>(
                 match signals.get_mut(&semaphore) {
                     None => {
                         let (signal, wait) = new_semaphore();
-                        assert!(waits.insert(semaphore, Some(wait)).is_none());
+                        debug_assert!(waits.insert(semaphore, Some(wait)).is_none());
                         signal
                     }
                     Some(signal) => {
@@ -372,7 +372,7 @@ pub fn sync<F, S, W>(
                 match waits.get_mut(&semaphore) {
                     None => {
                         let (signal, wait) = new_semaphore();
-                        assert!(signals.insert(semaphore, Some(signal)).is_none());
+                        debug_assert!(signals.insert(semaphore, Some(signal)).is_none());
                         wait
                     }
                     Some(wait) => {
@@ -380,12 +380,12 @@ pub fn sync<F, S, W>(
                     }
                 }
             });
-            assert_eq!(sid, new_queue.add_submission(submission.set_sync(sync)));
+            debug_assert_eq!(sid, new_queue.add_submission(submission.set_sync(sync)));
         }
     }
 
-    assert!(signals.values().all(|x| x.is_none()));
-    assert!(waits.values().all(|x| x.is_none()));
+    debug_assert!(signals.values().all(|x| x.is_none()));
+    debug_assert!(waits.values().all(|x| x.is_none()));
 
     result
 }
@@ -432,10 +432,10 @@ fn sync_submission_chain<R, S>(
     Guard<Semaphore, Semaphore>: Pick<R, Target = Barriers<R>>,
 {
     let ref this = chain.links()[link_index];
-    assert_eq!(this.family(), sid.family());
+    debug_assert_eq!(this.family(), sid.family());
     let ref queue = this.queue(sid.queue()).unwrap();
-    assert!(queue.first() <= sid.index());
-    assert!(queue.last() >= sid.index());
+    debug_assert!(queue.first() <= sid.index());
+    debug_assert!(queue.last() >= sid.index());
 
     let this_state = this.queue_state(sid.queue());
 

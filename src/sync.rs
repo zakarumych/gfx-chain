@@ -6,9 +6,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::{Range, RangeFrom, RangeTo};
 
-use hal::Backend;
-use hal::command::CommandBuffer;
-use hal::queue::{Submission as HalSubmission, Supports, Transfer};
 use hal::pso::PipelineStage;
 
 use Pick;
@@ -211,7 +208,7 @@ where
 }
 
 /// Map of barriers by resource id.
-pub type Barriers<R: Resource> = HashMap<Id<R>, Barrier<R>>;
+pub type Barriers<R> = HashMap<Id<R>, Barrier<R>>;
 
 /// Map of barriers by buffer id.
 pub type BufferBarriers = Barriers<Buffer>;
@@ -448,7 +445,7 @@ fn sync_submission_chain<R, S>(
     if queue.first() == sid.index() && link_index > 0 {
         // First of queue. Sync with prev.
         let ref prev = chain.links()[link_index - 1];
-        if prev.family() != this.family() && this.access().is_read() {
+        if prev.family() != this.family() && this.state().access.is_read() {
             // Transfer ownership.
             // Find earliest submission from this chain.
             // It will acquire ownership.
@@ -472,7 +469,7 @@ fn sync_submission_chain<R, S>(
                     id,
                     Barrier::acquire(
                         prev_latest.queue()..sid.queue(),
-                        prev.layout()..,
+                        prev.state().layout..,
                         ..this_state,
                     ),
                 );
@@ -525,7 +522,7 @@ fn sync_submission_chain<R, S>(
     if queue.last() == sid.index() && link_index + 1 < chain.links().len() {
         // Sync with next.
         let ref next = chain.links()[link_index + 1];
-        if next.family() != this.family() && next.access().is_read() {
+        if next.family() != this.family() && next.state().access.is_read() {
             // Transfer ownership.
 
             // Find latest submission from this chain.
@@ -554,7 +551,7 @@ fn sync_submission_chain<R, S>(
                     Barrier::release(
                         sid.queue()..next_earliest.queue(),
                         this_state..,
-                        ..next.layout(),
+                        ..next.state().layout,
                     ),
                 );
 

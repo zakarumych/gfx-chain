@@ -5,11 +5,21 @@
 
 use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use hal::queue::QueueFamilyId;
-use resource::{Buffer, Id, Image, State};
+use resource::{Buffer, Id, Image, State, Resource};
 
 /// Id of the pass.
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub struct PassId(pub usize);
+
+/// State in which pass uses resource and usage flags.
+#[derive(Clone, Copy, Debug)]
+pub struct StateUsage<R: Resource> {
+    /// State in which pass uses resource.
+    pub state: State<R>,
+
+    /// Usage flags.
+    pub usage: R::Usage,
+}
 
 /// Description of pass.
 #[derive(Clone, Debug)]
@@ -28,10 +38,10 @@ pub struct Pass {
     pub dependencies: Vec<PassId>,
 
     /// Buffer category ids and required state.
-    pub buffers: HashMap<Id<Buffer>, State<Buffer>>,
+    pub buffers: HashMap<Id<Buffer>, StateUsage<Buffer>>,
 
     /// Image category ids and required state.
-    pub images: HashMap<Id<Image>, State<Image>>,
+    pub images: HashMap<Id<Image>, StateUsage<Image>>,
 }
 
 impl Pass {
@@ -51,12 +61,12 @@ impl Pass {
     }
 
     /// Get iterator to buffer states this pass accesses.
-    pub fn buffers(&self) -> HashMapIter<Id<Buffer>, State<Buffer>> {
+    pub fn buffers(&self) -> HashMapIter<Id<Buffer>, StateUsage<Buffer>> {
         self.buffers.iter()
     }
 
     /// Get iterator to image states this pass accesses.
-    pub fn images(&self) -> HashMapIter<Id<Image>, State<Image>> {
+    pub fn images(&self) -> HashMapIter<Id<Image>, StateUsage<Image>> {
         self.images.iter()
     }
 }

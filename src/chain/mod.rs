@@ -8,7 +8,8 @@
 mod link;
 
 use std::collections::HashMap;
-use resource::{Buffer, Id, Image, Resource};
+use std::ops::BitOr;
+use resource::{Buffer, Id, Image, Resource, Usage};
 
 pub use self::link::Link;
 
@@ -78,6 +79,11 @@ where
     pub fn prev_link_mut(&mut self, index: usize) -> &mut Link<R> {
         let index = (index + self.links.len() - 1) % self.links.len();
         self.link_mut(index)
+    }
+
+    /// Get total usage.
+    pub fn usage(&self) -> R::Usage {
+        self.links.iter().map(Link::usage).fold(R::Usage::none(), BitOr::bitor)
     }
 }
 

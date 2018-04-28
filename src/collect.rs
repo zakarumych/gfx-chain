@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use hal::queue::QueueFamilyId;
 
 use chain::{BufferChains, Chain, ImageChains, Link};
-use pass::{Pass, PassId};
-use resource::{Resource, State};
+use pass::{Pass, PassId, StateUsage};
+use resource::{Resource, State, Usage};
 
 use Pick;
 use resource::Id;
@@ -128,7 +128,7 @@ fn fitness<S>(
             // Collect minimal waits required and resource transfers count.
             pass.buffers().for_each(|(id, &state)| {
                 let (t, w) = buffers.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, sid, state, schedule)
+                    transfers_and_wait_factor(chain, sid, state.state, schedule)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -137,7 +137,7 @@ fn fitness<S>(
             // Collect minimal waits required and resource transfers count.
             pass.images().for_each(|(id, &state)| {
                 let (t, w) = images.get(id).map_or((0, 0), |chain| {
-                    transfers_and_wait_factor(chain, sid, state, schedule)
+                    transfers_and_wait_factor(chain, sid, state.state, schedule)
                 });
                 result.transfers += t;
                 result.wait_factor = max(result.wait_factor, w);
@@ -161,7 +161,7 @@ where
     let mut transfers = 0;
     let mut wait_factor = 0;
 
-    let fake_link = Link::new(sid, state);
+    let fake_link = Link::new(sid, state, R::Usage::none());
     if let Some(link) = chain.links().last() {
         transfers += if link.transfer(&fake_link) { 1 } else { 0 };
 
@@ -187,14 +187,14 @@ fn schedule_pass(
     let sid = queue.add_submission(Submission::new(wait_factor, pass.id, Unsynchronized));
     let ref mut submission = queue[sid];
 
-    for (&id, &state) in pass.buffers() {
+    for (&id, &StateUsage { state, usage }) in pass.buffers() {
         let chain = buffers.entry(id).or_insert_with(|| Chain::new());
-        add_to_chain(id, chain, sid, submission, state);
+        add_to_chain(id, chain, sid, submission, state, usage);
     }
 
-    for (&id, &state) in pass.images() {
+    for (&id, &StateUsage { state, usage }) in pass.images() {
         let chain = images.entry(id).or_insert_with(|| Chain::new());
-        add_to_chain(id, chain, sid, submission, state);
+        add_to_chain(id, chain, sid, submission, state, usage);
     }
 }
 
@@ -204,6 +204,7 @@ fn add_to_chain<R, S>(
     sid: SubmissionId,
     submission: &mut Submission<S>,
     state: State<R>,
+    usage: R::Usage,
 ) where
     R: Resource,
     Submission<S>: Pick<R, Target = HashMap<Id<R>, usize>>,
@@ -212,12 +213,12 @@ fn add_to_chain<R, S>(
     let append = match chain.last_link_mut() {
         Some(ref mut link) if link.compatible(sid, state) => {
             submission.pick_mut().insert(id, chain_len - 1);
-            link.insert_submission(sid, state);
+            link.insert_submission(sid, state, usage);
             None
         }
         Some(_) | None => {
             submission.pick_mut().insert(id, chain_len);
-            Some(Link::new(sid, state))
+            Some(Link::new(sid, state, usage))
         }
     };
 

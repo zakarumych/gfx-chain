@@ -5,8 +5,8 @@ extern crate rand;
 
 use clap::{Arg, App, SubCommand};
 use gfx_chain::collect::collect;
-use gfx_chain::pass::{Pass, PassId};
-use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource};
+use gfx_chain::pass::{Pass, PassId, StateUsage};
+use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource, Usage};
 use gfx_chain::sync::sync;
 use hal::buffer::{Access as BufferAccess};
 use hal::image::{Access as ImageAccess, Layout as ImageLayout};
@@ -50,7 +50,7 @@ fn create_buffer_access_single(rng: &mut DefaultRng) -> BufferAccess {
         BufferAccess::HOST_WRITE,
         BufferAccess::MEMORY_READ,
         BufferAccess::MEMORY_WRITE,
-    ]).unwrap()
+      ]).unwrap()
 }
 fn create_buffer_access(rng: &mut DefaultRng) -> BufferAccess {
     let mut access = BufferAccess::empty();
@@ -150,13 +150,13 @@ fn create_deps(rng: &mut DefaultRng, i: usize) -> Vec<PassId> {
 
 fn create_resc_deps<R: Resource, F: Fn(&mut DefaultRng) -> State<R>>(
     rng: &mut DefaultRng, count: u32, used: &mut HashSet<Id<R>>, new_state: F,
-) -> HashMap<Id<R>, State<R>> {
+) -> HashMap<Id<R>, StateUsage<R>> {
     let mut map = HashMap::new();
     if count != 0 {
         for _ in 0..gen_inclusive_u32(rng, 1, min(count, 4)) {
             let id = Id::new(rng.gen_range(0, count));
             used.insert(id);
-            map.insert(id, new_state(rng));
+            map.insert(id, StateUsage { state: new_state(rng), usage: R::Usage::none() });
         }
     }
     map

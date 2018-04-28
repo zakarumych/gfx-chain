@@ -52,6 +52,7 @@ where
 /// But performing actions with access types not declared by the link is prohibited.
 #[derive(Clone, Debug)]
 pub struct Link<R: Resource> {
+    usage: R::Usage,
     state: State<R>,
     queues: HashMap<usize, LinkQueueState<R>>,
     family: QueueFamilyId,
@@ -68,12 +69,13 @@ where
     /// `state`     - state of the first submission.
     /// `sid`       - id of the first submission.
     ///
-    pub fn new(sid: SubmissionId, state: State<R>) -> Self {
+    pub fn new(sid: SubmissionId, state: State<R>, usage: R::Usage) -> Self {
         use std::iter::once;
         Link {
             state,
             queues: once((sid.queue().index(), LinkQueueState::new(sid, state))).collect(),
             family: sid.family(),
+            usage,
         }
     }
 
@@ -83,19 +85,14 @@ where
         self.family
     }
 
-    ///
-    pub fn access(&self) -> R::Access {
-        self.state.access
+    /// Get usage.
+    pub fn usage(&self) -> R::Usage {
+        self.usage
     }
 
-    ///
-    pub fn layout(&self) -> R::Layout {
-        self.state.layout
-    }
-
-    ///
-    pub fn stages(&self) -> PipelineStage {
-        self.state.stages
+    /// Get state.
+    pub fn state(&self) -> State<R> {
+        self.state
     }
 
     /// Check if the link is associated with only one submission.
@@ -128,7 +125,7 @@ where
     /// This function will panic if `state` and `sid` are not compatible.
     /// E.g. `Link::compatible` didn't returned `true` for the arguments.
     ///
-    pub fn insert_submission(&mut self, sid: SubmissionId, state: State<R>) {
+    pub fn insert_submission(&mut self, sid: SubmissionId, state: State<R>, usage: R::Usage) {
         assert_eq!(self.family, sid.family());
         let state = self.state.merge(state);
         match self.queues.entry(sid.queue().index()) {
@@ -140,6 +137,7 @@ where
             }
         };
         self.state = state;
+        self.usage |= usage;
     }
 
     /// Collect first submissions from all queues.
@@ -176,8 +174,8 @@ where
         let queue = self.queue(qid).unwrap();
         State {
             access: queue.access,
-            layout: self.state.layout,
             stages: queue.stages,
+            .. self.state
         }
     }
 

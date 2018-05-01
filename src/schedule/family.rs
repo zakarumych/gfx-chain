@@ -23,6 +23,11 @@ impl<S> Family<S> {
         }
     }
 
+    /// Get id of the family.
+    pub fn id(&self) -> QueueFamilyId {
+        self.id
+    }
+
     /// Get iterator over references to queues
     pub fn iter(&self) -> SliceIter<Queue<S>> {
         self.queues.iter()

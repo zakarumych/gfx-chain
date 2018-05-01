@@ -112,6 +112,11 @@ impl<S> Queue<S> {
         }
     }
 
+    /// Get id of the queue.
+    pub fn id(&self) -> QueueId {
+        self.id
+    }
+
     /// Iterate over references to all submissions.
     pub fn iter(&self) -> Submissions<S> {
         Submissions {

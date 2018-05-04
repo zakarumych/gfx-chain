@@ -492,7 +492,8 @@ fn sync_submission_chain<R, S>(
             }
         } else {
             // Same family or content discarding.
-            for tail in prev.tails() {
+            for (queue_id, queue) in prev.queues() {
+                let tail = SubmissionId::new(queue_id, queue.last());
                 if tail.queue() != sid.queue() {
                     // Wait for tails on other queues.
                     sync.acquire.wait.push(Wait::new(
@@ -567,7 +568,9 @@ fn sync_submission_chain<R, S>(
             }
         } else {
             // Same family or content discarding.
-            for head in next.heads() {
+            for (queue_id, queue) in next.queues() {
+                let head = SubmissionId::new(queue_id, queue.first());
+
                 if head.queue() != sid.queue() {
                     // Signal to heads on other queues.
                     sync.release.signal.push(Signal::new(Semaphore::new(

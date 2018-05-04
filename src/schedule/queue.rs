@@ -1,6 +1,7 @@
 use std::iter::{DoubleEndedIterator, Enumerate, ExactSizeIterator};
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
+use std::vec::{IntoIter as VecIntoIter};
 
 use hal::queue::QueueFamilyId;
 
@@ -35,12 +36,12 @@ impl QueueId {
 
 /// Iterator over references to submissions in queue.
 #[derive(Debug, Clone)]
-pub struct Submissions<'a, S: 'a> {
+pub struct QueueIter<'a, S: 'a> {
     qid: QueueId,
     iter: Enumerate<SliceIter<'a, Submission<S>>>,
 }
 
-impl<'a, S> Iterator for Submissions<'a, S> {
+impl<'a, S> Iterator for QueueIter<'a, S> {
     type Item = (SubmissionId, &'a Submission<S>);
 
     fn next(&mut self) -> Option<(SubmissionId, &'a Submission<S>)> {
@@ -54,7 +55,7 @@ impl<'a, S> Iterator for Submissions<'a, S> {
     }
 }
 
-impl<'a, S> DoubleEndedIterator for Submissions<'a, S> {
+impl<'a, S> DoubleEndedIterator for QueueIter<'a, S> {
     fn next_back(&mut self) -> Option<(SubmissionId, &'a Submission<S>)> {
         self.iter
             .next_back()
@@ -62,16 +63,16 @@ impl<'a, S> DoubleEndedIterator for Submissions<'a, S> {
     }
 }
 
-impl<'a, S> ExactSizeIterator for Submissions<'a, S> {}
+impl<'a, S> ExactSizeIterator for QueueIter<'a, S> {}
 
 /// Iterator over mutable references to submissions in queue.
 #[derive(Debug)]
-pub struct SubmissionsMut<'a, S: 'a> {
+pub struct QueueIterMut<'a, S: 'a> {
     qid: QueueId,
     iter: Enumerate<SliceIterMut<'a, Submission<S>>>,
 }
 
-impl<'a, S> Iterator for SubmissionsMut<'a, S> {
+impl<'a, S> Iterator for QueueIterMut<'a, S> {
     type Item = (SubmissionId, &'a mut Submission<S>);
 
     fn next(&mut self) -> Option<(SubmissionId, &'a mut Submission<S>)> {
@@ -85,7 +86,7 @@ impl<'a, S> Iterator for SubmissionsMut<'a, S> {
     }
 }
 
-impl<'a, S> DoubleEndedIterator for SubmissionsMut<'a, S> {
+impl<'a, S> DoubleEndedIterator for QueueIterMut<'a, S> {
     fn next_back(&mut self) -> Option<(SubmissionId, &'a mut Submission<S>)> {
         self.iter
             .next_back()
@@ -93,7 +94,38 @@ impl<'a, S> DoubleEndedIterator for SubmissionsMut<'a, S> {
     }
 }
 
-impl<'a, S> ExactSizeIterator for SubmissionsMut<'a, S> {}
+impl<'a, S> ExactSizeIterator for QueueIterMut<'a, S> {}
+
+/// Iterator over owned references to submissions in queue.
+#[derive(Debug)]
+pub struct QueueIntoIter<S> {
+    qid: QueueId,
+    iter: Enumerate<VecIntoIter<Submission<S>>>,
+}
+
+impl<S> Iterator for QueueIntoIter<S> {
+    type Item = (SubmissionId, Submission<S>);
+
+    fn next(&mut self) -> Option<(SubmissionId, Submission<S>)> {
+        self.iter
+            .next()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<S> DoubleEndedIterator for QueueIntoIter<S> {
+    fn next_back(&mut self) -> Option<(SubmissionId, Submission<S>)> {
+        self.iter
+            .next_back()
+            .map(|(index, submission)| (SubmissionId::new(self.qid, index), submission))
+    }
+}
+
+impl<S> ExactSizeIterator for QueueIntoIter<S> {}
 
 /// Instances of this type contains array of `Submission`s.
 /// Those submissions are expected to be submissionted in order.
@@ -117,19 +149,27 @@ impl<S> Queue<S> {
         self.id
     }
 
-    /// Iterate over references to all submissions.
-    pub fn iter(&self) -> Submissions<S> {
-        Submissions {
+    /// Iterate over immutable references to each submission in this queue
+    pub fn iter(&self) -> QueueIter<S> {
+        QueueIter {
             qid: self.id,
             iter: self.submissions.iter().enumerate(),
         }
     }
 
-    /// Iterate over mutable references to all submissions.
-    pub fn iter_mut(&mut self) -> SubmissionsMut<S> {
-        SubmissionsMut {
+    /// Iterate over mutable references to each submission in this queue
+    pub fn iter_mut(&mut self) -> QueueIterMut<S> {
+        QueueIterMut {
             qid: self.id,
             iter: self.submissions.iter_mut().enumerate(),
+        }
+    }
+
+    /// Iterate over mutable references to each submission in this queue
+    pub fn into_iter(self) -> QueueIntoIter<S> {
+        QueueIntoIter {
+            qid: self.id,
+            iter: self.submissions.into_iter().enumerate(),
         }
     }
 
@@ -175,6 +215,33 @@ impl<S> Queue<S> {
     pub fn add_submission(&mut self, submission: Submission<S>) -> SubmissionId {
         self.submissions.push(submission);
         SubmissionId::new(self.id, self.submissions.len() - 1)
+    }
+}
+
+impl<S> IntoIterator for Queue<S> {
+    type Item = (SubmissionId, Submission<S>);
+    type IntoIter = QueueIntoIter<S>;
+
+    fn into_iter(self) -> QueueIntoIter<S> {
+        self.into_iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a Queue<S> {
+    type Item = (SubmissionId, &'a Submission<S>);
+    type IntoIter = QueueIter<'a, S>;
+
+    fn into_iter(self) -> QueueIter<'a, S> {
+        self.iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a mut Queue<S> {
+    type Item = (SubmissionId, &'a mut Submission<S>);
+    type IntoIter = QueueIterMut<'a, S>;
+
+    fn into_iter(self) -> QueueIterMut<'a, S> {
+        self.iter_mut()
     }
 }
 

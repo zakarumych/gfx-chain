@@ -9,10 +9,10 @@ use std::ops::{Range, RangeFrom, RangeTo};
 use hal::pso::PipelineStage;
 
 use Pick;
-use chain::{BufferChains, Chain, ImageChains, Link};
+use chain::{Chain, Link};
 use collect::{Chains, Unsynchronized};
 use resource::{Access, Buffer, Id, Image, Resource, State};
-use schedule::{QueueId, Schedule, Submission, SubmissionId};
+use schedule::{QueueId, Schedule, SubmissionId};
 
 fn earlier_stage(stages: PipelineStage) -> PipelineStage {
     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
@@ -88,13 +88,9 @@ struct Semaphore {
 }
 
 impl Semaphore {
-    fn new<R>(id: Id<R>, points: Range<Point>) -> Self
-    where
-        R: Resource,
-        Id<R>: Into<Uid>,
-    {
+    fn new(id: Uid, points: Range<Point>) -> Self {
         Semaphore {
-            id: id.into(),
+            id,
             points,
         }
     }
@@ -328,6 +324,13 @@ impl<S, W> SyncData<S, W> {
     }
 }
 
+struct SyncTemp(HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>);
+impl SyncTemp {
+    fn get_sync(&mut self, sid: SubmissionId) -> &mut SyncData<Semaphore, Semaphore> {
+        self.0.entry(sid).or_insert_with(|| SyncData::new())
+    }
+}
+
 /// Find required synchronization for all submissions in `Chains`.
 pub fn sync<F, S, W>(
     chains: &Chains<Unsynchronized>,
@@ -339,12 +342,13 @@ pub fn sync<F, S, W>(
     let ref buffers = chains.buffers;
     let ref images = chains.images;
 
-    let mut sync = schedule
-        .iter()
-        .flat_map(|family| family.iter())
-        .flat_map(|queue| queue.iter())
-        .map(|(sid, submission)| (sid, sync_submission(sid, submission, buffers, images, schedule)))
-        .collect();
+    let mut sync = SyncTemp(HashMap::new());
+    for (&id, chain) in buffers {
+        sync_chain(id, chain, schedule, &mut sync);
+    }
+    for (&id, chain) in images {
+        sync_chain(id, chain, schedule, &mut sync);
+    }
 
     optimize(schedule, &mut sync);
 
@@ -355,35 +359,40 @@ pub fn sync<F, S, W>(
     for queue in schedule.iter().flat_map(|family| family.iter()) {
         let new_queue = result.ensure_queue(queue.id());
         for (sid, submission) in queue.iter() {
-            let sync = sync.remove(&sid).unwrap();
-            let sync = sync.convert_signal(|semaphore| {
-                match signals.get_mut(&semaphore) {
-                    None => {
-                        let (signal, wait) = new_semaphore();
-                        debug_assert!(waits.insert(semaphore, Some(wait)).is_none());
-                        signal
+            let sync = if let Some(sync) = sync.0.remove(&sid) {
+                let sync = sync.convert_signal(|semaphore| {
+                    match signals.get_mut(&semaphore) {
+                        None => {
+                            let (signal, wait) = new_semaphore();
+                            debug_assert!(waits.insert(semaphore, Some(wait)).is_none());
+                            signal
+                        }
+                        Some(signal) => {
+                            signal.take().unwrap()
+                        }
                     }
-                    Some(signal) => {
-                        signal.take().unwrap()
+                });
+                let sync = sync.convert_wait(|semaphore| {
+                    match waits.get_mut(&semaphore) {
+                        None => {
+                            let (signal, wait) = new_semaphore();
+                            debug_assert!(signals.insert(semaphore, Some(signal)).is_none());
+                            wait
+                        }
+                        Some(wait) => {
+                            wait.take().unwrap()
+                        }
                     }
-                }
-            });
-            let sync = sync.convert_wait(|semaphore| {
-                match waits.get_mut(&semaphore) {
-                    None => {
-                        let (signal, wait) = new_semaphore();
-                        debug_assert!(signals.insert(semaphore, Some(signal)).is_none());
-                        wait
-                    }
-                    Some(wait) => {
-                        wait.take().unwrap()
-                    }
-                }
-            });
+                });
+                sync
+            } else {
+                SyncData::new()
+            };
             debug_assert_eq!(sid, new_queue.add_submission(submission.set_sync(sync)));
         }
     }
 
+    debug_assert!(sync.0.is_empty());
     debug_assert!(signals.values().all(|x| x.is_none()));
     debug_assert!(waits.values().all(|x| x.is_none()));
 
@@ -396,7 +405,7 @@ where
 {
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
-            let sid = SubmissionId::new(qid, queue.last());
+            let sid = SubmissionId::new(qid, queue.last);
             (schedule[sid].wait_factor(), sid)
         })
         .max_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
@@ -410,7 +419,7 @@ where
 {
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
-            let sid = SubmissionId::new(qid, queue.first());
+            let sid = SubmissionId::new(qid, queue.first);
             (schedule[sid].wait_factor(), sid)
         })
         .min_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
@@ -418,201 +427,129 @@ where
     sid
 }
 
-fn sync_submission_chain<R, S>(
-    sid: SubmissionId,
-    _submission: &Submission<S>,
-    link_index: usize,
+fn generate_semaphore_pair<R: Resource>(
+    sync: &mut SyncTemp, id: Uid, link: &Link<R>,
+    range: Range<SubmissionId>, sides: Range<Side>,
+) {
+    let points = Point::new(range.start, sides.start) .. Point::new(range.end, sides.end);
+    if points.start.sid.queue() != points.end.sid.queue() {
+        let semaphore = Semaphore::new(id, points.clone());
+        sync.get_sync(points.start.sid).get_mut(points.start.side).signal
+            .push(Signal::new(semaphore.clone()));
+        sync.get_sync(points.end.sid).get_mut(points.end.side).wait
+            .push(Wait::new(semaphore, link.queue(points.end.sid.queue()).stages));
+    }
+}
+
+fn sync_chain<R, S>(
     id: Id<R>,
     chain: &Chain<R>,
     schedule: &Schedule<S>,
-    sync: &mut SyncData<Semaphore, Semaphore>,
+    sync: &mut SyncTemp,
 ) where
     R: Resource,
     Id<R>: Into<Uid>,
     Guard<Semaphore, Semaphore>: Pick<R, Target = Barriers<R>>,
 {
-    let ref this = chain.links()[link_index];
-    debug_assert_eq!(this.family(), sid.family());
-    let ref queue = this.queue(sid.queue()).unwrap();
-    debug_assert!(queue.first() <= sid.index());
-    debug_assert!(queue.last() >= sid.index());
+    let uid = id.into();
+    for (prev_link, link) in chain.links().into_iter().skip(1).zip(chain.links().into_iter()) {
+        if prev_link.family() == link.family() {
+            // Prefer to generate barriers on the acquire side, if possible.
+            if prev_link.single_queue() && !link.single_queue() {
+                let signal_sid = latest(prev_link, schedule);
 
-    let this_state = this.queue_state(sid.queue());
+                // Generate barrier in prev link's last submission.
+                sync.get_sync(signal_sid).release.pick_mut()
+                    .insert(id, Barrier::new(prev_link.state()..link.state()));
 
-    if queue.first() == sid.index() && link_index > 0 {
-        // First of queue. Sync with prev.
-        let ref prev = chain.links()[link_index - 1];
-        if prev.family() != this.family() && this.state().access.is_read() {
-            // Transfer ownership.
-            // Find earliest submission from this chain.
-            // It will acquire ownership.
-            let this_earliest = earliest(this, schedule);
-            if this_earliest == sid {
-                // Find latest submission from prev chain.
-                // It will release ownership.
-                let prev_latest = latest(prev, schedule);
-
-                // Wait for release.
-                sync.acquire.wait.push(Wait::new(
-                    Semaphore::new(
-                        id,
-                        Point::new(prev_latest, Side::Release)..Point::new(sid, Side::Acquire),
-                    ),
-                    this_state.stages,
-                ));
-
-                // Acquire ownership.
-                sync.acquire.pick_mut().insert(
-                    id,
-                    Barrier::acquire(
-                        prev_latest.queue()..sid.queue(),
-                        prev.state().layout..,
-                        ..this_state,
-                    ),
-                );
-
-                // Signal to other queues in this link.
-                for (qid, queue) in this.queues().filter(|&(qid, _)| qid != sid.queue()) {
-                    sync.acquire.signal.push(Signal::new(Semaphore::new(
-                        id,
-                        Point::new(sid, Side::Acquire)
-                            ..Point::new(SubmissionId::new(qid, queue.first()), Side::Acquire),
-                    )));
+                // Generate semaphores between queues in the previous link and the current one.
+                for (queue_id, queue) in link.queues() {
+                    let head = SubmissionId::new(queue_id, queue.first);
+                    generate_semaphore_pair(
+                        sync, uid, link,
+                        signal_sid .. head, Side::Release .. Side::Acquire,
+                    );
                 }
             } else {
-                // This is not the earliest.
-                // Wait for earliest.
-                sync.acquire.wait.push(Wait::new(
-                    Semaphore::new(
-                        id,
-                        Point::new(this_earliest, Side::Acquire)..Point::new(sid, Side::Acquire),
-                    ),
-                    this_state.stages,
-                ));
+                let wait_sid = earliest(link, schedule);
+
+                // Generate semaphores between queues in the previous link and the current one.
+                for (queue_id, queue) in prev_link.queues() {
+                    let tail = SubmissionId::new(queue_id, queue.last);
+                    generate_semaphore_pair(
+                        sync, uid, link,
+                        tail .. wait_sid, Side::Release .. Side::Acquire,
+                    );
+                }
+
+                // Generate barrier in next link's first submission.
+                sync.get_sync(wait_sid).acquire.pick_mut()
+                    .insert(id, Barrier::new(prev_link.state()..link.state()));
+
+                if !link.single_queue() {
+                    // Delay other queues in the link until the barrier finishes
+                    for (queue_id, queue) in link.queues() {
+                        if queue_id != wait_sid.queue() {
+                            let head = SubmissionId::new(queue_id, queue.first);
+                            generate_semaphore_pair(
+                                sync, uid, link,
+                                wait_sid .. head, Side::Acquire .. Side::Acquire,
+                            );
+                        }
+                    }
+                }
             }
         } else {
-            // Same family or content discarding.
-            for (queue_id, queue) in prev.queues() {
-                let tail = SubmissionId::new(queue_id, queue.last());
-                if tail.queue() != sid.queue() {
-                    // Wait for tails on other queues.
-                    sync.acquire.wait.push(Wait::new(
-                        Semaphore::new(
-                            id,
-                            Point::new(tail, Side::Release)..Point::new(sid, Side::Acquire),
-                        ),
-                        this_state.stages,
-                    ));
-                } else if !prev.single_queue() {
-                    // Insert barrier here.
-                    // Prev won't insert as it isn't exclusive.
-                    assert!(this.single_queue(),
-                            "Barriers cannot currently be inserted between links that both \
-                             involve more than one queue.");
-                    sync.acquire
-                        .pick_mut()
-                        .insert(id, Barrier::new(prev.queue_state(tail.queue())..this_state));
+            let signal_sid = latest(prev_link, schedule);
+            let wait_sid = earliest(link, schedule);
+
+            if !prev_link.single_queue() {
+                // Delay the last submission in the queue until other queues finish
+                for (queue_id, queue) in link.queues() {
+                    if queue_id != signal_sid.queue() {
+                        let tail = SubmissionId::new(queue_id, queue.last);
+                        generate_semaphore_pair(
+                            sync, uid, prev_link,
+                            tail .. signal_sid, Side::Release .. Side::Release,
+                        );
+                    }
+                }
+            }
+
+            // Generate a semaphore between the signal and wait sides of the transfer.
+            generate_semaphore_pair(
+                sync, uid, link,
+                signal_sid .. wait_sid, Side::Release .. Side::Acquire,
+            );
+
+            // Generate barriers to transfer the resource to another queue.
+            sync.get_sync(signal_sid).release.pick_mut()
+                .insert(id, Barrier::release(
+                    signal_sid.queue() .. wait_sid.queue(),
+                    prev_link.queue_state(signal_sid.queue()) ..,
+                    .. link.state().layout,
+                ));
+            sync.get_sync(wait_sid).acquire.pick_mut()
+                .insert(id, Barrier::acquire(
+                    signal_sid.queue() .. wait_sid.queue(),
+                    prev_link.state().layout ..,
+                    .. link.queue_state(wait_sid.queue()),
+                ));
+
+            if !link.single_queue() {
+                // Delay other queues in the link until the barrier finishes
+                for (queue_id, queue) in link.queues() {
+                    if queue_id != wait_sid.queue() {
+                        let head = SubmissionId::new(queue_id, queue.first);
+                        generate_semaphore_pair(
+                            sync, uid, link,
+                            wait_sid .. head, Side::Acquire .. Side::Acquire,
+                        );
+                    }
                 }
             }
         }
     }
-
-    if queue.last() == sid.index() && link_index + 1 < chain.links().len() {
-        // Sync with next.
-        let ref next = chain.links()[link_index + 1];
-        if next.family() != this.family() && next.state().access.is_read() {
-            // Transfer ownership.
-
-            // Find latest submission from this chain.
-            // It will release ownership.
-            let this_latest = latest(this, schedule);
-            if this_latest == sid {
-                // Wait for other queues in this link.
-                for (qid, queue) in this.queues().filter(|&(qid, _)| qid != sid.queue()) {
-                    sync.release.wait.push(Wait::new(
-                        Semaphore::new(
-                            id,
-                            Point::new(SubmissionId::new(qid, queue.last()), Side::Release)
-                                ..Point::new(sid, Side::Release),
-                        ),
-                        PipelineStage::TOP_OF_PIPE,
-                    ));
-                }
-
-                // Find earliest submission from next chain.
-                // It will acquire ownership.
-                let next_earliest = earliest(next, schedule);
-
-                // Release ownership.
-                sync.release.pick_mut().insert(
-                    id,
-                    Barrier::release(
-                        sid.queue()..next_earliest.queue(),
-                        this_state..,
-                        ..next.state().layout,
-                    ),
-                );
-
-                // Signal to acquire.
-                sync.release.signal.push(Signal::new(Semaphore::new(
-                    id,
-                    Point::new(sid, Side::Release)..Point::new(next_earliest, Side::Acquire),
-                )));
-            } else {
-                // This is not the latest.
-                // Signal to latest.
-                sync.release.signal.push(Signal::new(Semaphore::new(
-                    id,
-                    Point::new(sid, Side::Release)..Point::new(this_latest, Side::Release),
-                )));
-            }
-        } else {
-            // Same family or content discarding.
-            for (queue_id, queue) in next.queues() {
-                let head = SubmissionId::new(queue_id, queue.first());
-
-                if head.queue() != sid.queue() {
-                    // Signal to heads on other queues.
-                    sync.release.signal.push(Signal::new(Semaphore::new(
-                        id,
-                        Point::new(sid, Side::Release)..Point::new(head, Side::Acquire),
-                    )));
-                } else if this.single_queue() {
-                    // Insert barrier here.
-                    // Next won't insert as this is exclusive.
-                    sync.release
-                        .pick_mut()
-                        .insert(id, Barrier::new(this_state..next.queue_state(head.queue())));
-                } else {
-                    // Next will insert barrier.
-                    assert!(next.single_queue(),
-                            "Barriers cannot currently be inserted between links that both \
-                             involve more than one queue.");
-                }
-            }
-        }
-    }
-}
-
-fn sync_submission<S>(
-    sid: SubmissionId,
-    submission: &Submission<S>,
-    buffers: &BufferChains,
-    images: &ImageChains,
-    schedule: &Schedule<S>,
-) -> SyncData<Semaphore, Semaphore> {
-    let mut sync = SyncData::new();
-    for (&id, &index) in submission.buffers() {
-        let ref chain = buffers[&id];
-        sync_submission_chain(sid, submission, index, id, chain, schedule, &mut sync);
-    }
-
-    for (&id, &index) in submission.images() {
-        let ref chain = images[&id];
-        sync_submission_chain(sid, submission, index, id, chain, schedule, &mut sync);
-    }
-
-    sync
 }
 
 fn optimize_side(
@@ -644,20 +581,23 @@ fn optimize_side(
 
 fn optimize_submission(
     sid: SubmissionId,
+    to_remove: &mut Vec<Semaphore>,
     found: &mut HashMap<QueueId, (usize, Side)>,
-    sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>,
+    sync: &mut SyncTemp,
 ) {
-    let mut to_remove = Vec::new();
-
     {
-        let sync_data = sync.get_mut(&sid).unwrap();
-        optimize_side(&mut sync_data.acquire, &mut to_remove, found);
-        optimize_side(&mut sync_data.release, &mut to_remove, found);
+        let sync_data = sync.0.get_mut(&sid);
+        if let Some(sync_data) = sync_data {
+            optimize_side(&mut sync_data.acquire, to_remove, found);
+            optimize_side(&mut sync_data.release, to_remove, found);
+        } else {
+            return
+        }
     }
 
-    for semaphore in to_remove {
+    for semaphore in to_remove.drain(..) {
         // Delete signal as well.
-        let ref mut signal = sync.get_mut(&semaphore.points.start.sid)
+        let ref mut signal = sync.0.get_mut(&semaphore.points.start.sid)
             .unwrap()
             .get_mut(semaphore.points.start.side)
             .signal;
@@ -668,12 +608,13 @@ fn optimize_submission(
 
 fn optimize<S>(
     schedule: &Schedule<S>,
-    sync: &mut HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>,
+    sync: &mut SyncTemp,
 ) {
+    let mut to_remove = Vec::new();
     for queue in schedule.iter().flat_map(|family| family.iter()) {
         let mut found = HashMap::new();
         for (sid, _) in queue.iter() {
-            optimize_submission(sid, &mut found, sync);
+            optimize_submission(sid, &mut to_remove, &mut found, sync);
         }
     }
 }

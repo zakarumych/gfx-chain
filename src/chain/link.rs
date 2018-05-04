@@ -11,10 +11,10 @@ use schedule::{QueueId, SubmissionId};
 /// Contains submissions range, combined access and stages bits by submissions from the range.
 #[derive(Clone, Debug)]
 pub(crate) struct LinkQueueState<R: Resource> {
-    first: usize,
-    last: usize,
-    access: R::Access,
-    stages: PipelineStage,
+    pub first: usize,
+    pub last: usize,
+    pub access: R::Access,
+    pub stages: PipelineStage,
 }
 
 impl<R> LinkQueueState<R>
@@ -34,16 +34,6 @@ where
         self.access |= state.access;
         self.stages |= state.stages;
         self.last = sid.index();
-    }
-
-    /// First submission index.
-    pub fn first(&self) -> usize {
-        self.first
-    }
-
-    /// Last submission index.
-    pub fn last(&self) -> usize {
-        self.last
     }
 }
 
@@ -166,7 +156,7 @@ where
 
     ///
     pub(crate) fn queue_state(&self, qid: QueueId) -> State<R> {
-        let queue = self.queue(qid).unwrap();
+        let queue = self.queue(qid);
         State {
             access: queue.access,
             stages: queue.stages,
@@ -174,13 +164,9 @@ where
         }
     }
 
-    pub(crate) fn queue(&self, qid: QueueId) -> Option<&LinkQueueState<R>> {
+    pub(crate) fn queue(&self, qid: QueueId) -> &LinkQueueState<R> {
         debug_assert_eq!(self.family, qid.family());
-        if qid.index() < self.queues.len() {
-            self.queues[qid.index()].as_ref()
-        } else {
-            None
-        }
+        self.queues[qid.index()].as_ref().unwrap()
     }
 }
 

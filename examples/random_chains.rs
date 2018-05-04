@@ -95,7 +95,7 @@ fn create_image_layout(rng: &mut DefaultRng) -> ImageLayout {
         ImageLayout::ShaderReadOnlyOptimal,
         ImageLayout::TransferSrcOptimal,
         ImageLayout::TransferDstOptimal,
-        //ImageLayout::Present, // FIXME
+        ImageLayout::Present,
     ]).unwrap()
 }
 

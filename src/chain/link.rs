@@ -188,6 +188,6 @@ impl<'a, R: Resource + 'a> Iterator for QueuesIter<'a, R> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
+        (0, self.iter.size_hint().1)
     }
 }

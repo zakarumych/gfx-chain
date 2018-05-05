@@ -32,7 +32,7 @@ where
     /// Create new empty `Chain`
     pub fn new() -> Self {
         Chain {
-            links: Vec::new()
+            links: Vec::new(),
         }
     }
 

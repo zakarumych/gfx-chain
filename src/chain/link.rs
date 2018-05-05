@@ -1,4 +1,5 @@
-use std::collections::hash_map::{Entry, HashMap, Iter as HashMapIter};
+use std::iter::Enumerate;
+use std::slice::{Iter as SliceIter};
 
 use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
@@ -10,10 +11,10 @@ use schedule::{QueueId, SubmissionId};
 /// Contains submissions range, combined access and stages bits by submissions from the range.
 #[derive(Clone, Debug)]
 pub(crate) struct LinkQueueState<R: Resource> {
-    first: usize,
-    last: usize,
-    access: R::Access,
-    stages: PipelineStage,
+    pub first: usize,
+    pub last: usize,
+    pub access: R::Access,
+    pub stages: PipelineStage,
 }
 
 impl<R> LinkQueueState<R>
@@ -34,16 +35,6 @@ where
         self.stages |= state.stages;
         self.last = sid.index();
     }
-
-    /// First submission index.
-    pub fn first(&self) -> usize {
-        self.first
-    }
-
-    /// Last submission index.
-    pub fn last(&self) -> usize {
-        self.last
-    }
 }
 
 /// This type defines what states resource are at some point in time when commands recorded into
@@ -54,7 +45,8 @@ where
 pub struct Link<R: Resource> {
     usage: R::Usage,
     state: State<R>,
-    queues: HashMap<usize, LinkQueueState<R>>,
+    queue_count: usize,
+    queues: Vec<Option<LinkQueueState<R>>>,
     family: QueueFamilyId,
 }
 
@@ -70,12 +62,25 @@ where
     /// `sid`       - id of the first submission.
     ///
     pub fn new(sid: SubmissionId, state: State<R>, usage: R::Usage) -> Self {
-        use std::iter::once;
-        Link {
+        let mut link = Link {
             state,
-            queues: once((sid.queue().index(), LinkQueueState::new(sid, state))).collect(),
+            queue_count: 1,
+            queues: Vec::new(),
             family: sid.family(),
             usage,
+        };
+        link.ensure_queue(sid.queue().index());
+        link.queues[sid.queue().index()] = Some(LinkQueueState::new(sid, state));
+        link
+    }
+
+    fn ensure_queue(&mut self, index: usize) {
+        if index >= self.queues.len() {
+            let reserve = index - self.queues.len() + 1;
+            self.queues.reserve(reserve);
+            while index >= self.queues.len() {
+                self.queues.push(None);
+            }
         }
     }
 
@@ -95,16 +100,9 @@ where
         self.state
     }
 
-    /// Check if the link is associated with only one submission.
-    pub fn exclusive(&self) -> bool {
-        let mut values = self.queues.values();
-        let queue = values.next().unwrap();
-        values.next().is_none() && queue.first() == queue.last()
-    }
-
     /// Check if the link is associated with only one queue.
     pub fn single_queue(&self) -> bool {
-        self.queues().len() == 1
+        self.queue_count == 1
     }
 
     /// Check if the given state and submission are compatible with link.
@@ -127,33 +125,20 @@ where
     ///
     pub fn insert_submission(&mut self, sid: SubmissionId, state: State<R>, usage: R::Usage) {
         assert_eq!(self.family, sid.family());
+        self.ensure_queue(sid.queue().index());
+
         let state = self.state.merge(state);
-        match self.queues.entry(sid.queue().index()) {
-            Entry::Occupied(mut occupied) => {
-                occupied.get_mut().push(sid, state);
+        match &mut self.queues[sid.queue().index()] {
+            &mut Some(ref mut queue) => {
+                queue.push(sid, state);
             }
-            Entry::Vacant(vacant) => {
-                vacant.insert(LinkQueueState::new(sid, state));
+            slot @ &mut None => {
+                self.queue_count += 1;
+                *slot = Some(LinkQueueState::new(sid, state));
             }
-        };
+        }
         self.state = state;
         self.usage |= usage;
-    }
-
-    /// Collect first submissions from all queues.
-    pub fn heads(&self) -> Vec<SubmissionId> {
-        self.queues
-            .iter()
-            .map(|(&index, queue)| SubmissionId::new(QueueId::new(self.family, index), queue.first()))
-            .collect()
-    }
-
-    /// Collect last submissions from all queues.
-    pub fn tails(&self) -> Vec<SubmissionId> {
-        self.queues
-            .iter()
-            .map(|(&index, queue)| SubmissionId::new(QueueId::new(self.family, index), queue.last()))
-            .collect()
     }
 
     /// Check if ownership transfer is required between those links.
@@ -165,13 +150,13 @@ where
     pub(crate) fn queues(&self) -> QueuesIter<R> {
         QueuesIter {
             family: self.family,
-            iter: self.queues.iter(),
+            iter: self.queues.iter().enumerate(),
         }
     }
 
     ///
     pub(crate) fn queue_state(&self, qid: QueueId) -> State<R> {
-        let queue = self.queue(qid).unwrap();
+        let queue = self.queue(qid);
         State {
             access: queue.access,
             stages: queue.stages,
@@ -179,36 +164,30 @@ where
         }
     }
 
-    pub(crate) fn queue(&self, qid: QueueId) -> Option<&LinkQueueState<R>> {
-        assert_eq!(self.family, qid.family());
-        self.queues.get(&qid.index())
+    pub(crate) fn queue(&self, qid: QueueId) -> &LinkQueueState<R> {
+        debug_assert_eq!(self.family, qid.family());
+        self.queues[qid.index()].as_ref().unwrap()
     }
 }
 
 pub(crate) struct QueuesIter<'a, R: Resource + 'a> {
     family: QueueFamilyId,
-    iter: HashMapIter<'a, usize, LinkQueueState<R>>,
+    iter: Enumerate<SliceIter<'a, Option<LinkQueueState<R>>>>,
 }
 
-impl<'a, R> Iterator for QueuesIter<'a, R>
-where
-    R: Resource + 'a,
-{
+impl<'a, R: Resource + 'a> Iterator for QueuesIter<'a, R> {
     type Item = (QueueId, &'a LinkQueueState<R>);
 
     fn next(&mut self) -> Option<(QueueId, &'a LinkQueueState<R>)> {
-        self.iter
-            .next()
-            .map(|(&index, queue)| (QueueId::new(self.family, index), queue))
+        while let Some((index, state)) = self.iter.next() {
+            if let &Some(ref queue) = state {
+                return Some((QueueId::new(self.family, index), queue))
+            }
+        }
+        None
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (0, self.iter.size_hint().1)
     }
-}
-
-impl<'a, R> ExactSizeIterator for QueuesIter<'a, R>
-where
-    R: Resource + 'a,
-{
 }

@@ -10,6 +10,9 @@ repository = "https://github.com/omni-viral/chains.git"
 readme = "README.md"
 license = "MIT/Apache-2.0"
 
+[profile.release]
+debug = 2
+
 [dependencies]
 derivative = "1.0"
 gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "54fe14fbb" }

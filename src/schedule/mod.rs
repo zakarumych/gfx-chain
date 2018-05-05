@@ -12,14 +12,15 @@ mod family;
 mod submission;
 mod queue;
 
-use std::collections::hash_map::{HashMap, Values as HashMapValues, ValuesMut as HashMapValuesMut};
+use std::collections::hash_map::{HashMap, Values as HashMapValues, ValuesMut as HashMapValuesMut,
+                                 IntoIter as HashMapIntoIter};
 use std::ops::{Index, IndexMut};
 
 use hal::queue::QueueFamilyId;
 
 pub use self::family::Family;
 pub use self::submission::{Submission, SubmissionId};
-pub use self::queue::{Queue, QueueId, Submissions, SubmissionsMut};
+pub use self::queue::{Queue, QueueId, QueueIter, QueueIterMut};
 
 /// All schedule on which passes were scheduled.
 #[derive(Debug)]
@@ -35,14 +36,19 @@ impl<S> Schedule<S> {
         }
     }
 
-    /// Iterate over references to all schedule.
+    /// Iterate over immutable references to families in this schedule.
     pub fn iter(&self) -> HashMapValues<QueueFamilyId, Family<S>> {
         self.map.values()
     }
 
-    /// Iterate over mutable references to all schedule.
+    /// Iterate over mutable references to families in this schedule
     pub fn iter_mut(&mut self) -> HashMapValuesMut<QueueFamilyId, Family<S>> {
         self.map.values_mut()
+    }
+
+    /// Iterate over owned families in this schedule
+    pub fn into_iter(self) -> ScheduleIntoIter<S> {
+        ScheduleIntoIter(self.map.into_iter())
     }
 
     /// Get reference to `Family` instance by the id.
@@ -89,6 +95,47 @@ impl<S> Schedule<S> {
     pub fn submission_mut(&mut self, sid: SubmissionId) -> Option<&mut Submission<S>> {
         self.queue_mut(sid.queue())
             .and_then(|queue| queue.submission_mut(sid))
+    }
+}
+
+/// Iterator over owned families in this schedule
+pub struct ScheduleIntoIter<S>(HashMapIntoIter<QueueFamilyId, Family<S>>);
+
+impl<S> Iterator for ScheduleIntoIter<S> {
+    type Item = Family<S>;
+
+    fn next(&mut self) -> Option<Family<S>> {
+        self.0.next().map(|x| x.1)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<S> IntoIterator for Schedule<S> {
+    type Item = Family<S>;
+    type IntoIter = ScheduleIntoIter<S>;
+
+    fn into_iter(self) -> ScheduleIntoIter<S> {
+        self.into_iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a Schedule<S> {
+    type Item = &'a Family<S>;
+    type IntoIter = HashMapValues<'a, QueueFamilyId, Family<S>>;
+
+    fn into_iter(self) -> HashMapValues<'a, QueueFamilyId, Family<S>> {
+        self.iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a mut Schedule<S> {
+    type Item = &'a mut Family<S>;
+    type IntoIter = HashMapValuesMut<'a, QueueFamilyId, Family<S>>;
+
+    fn into_iter(self) -> HashMapValuesMut<'a, QueueFamilyId, Family<S>> {
+        self.iter_mut()
     }
 }
 

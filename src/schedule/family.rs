@@ -1,5 +1,6 @@
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
+use std::vec::{IntoIter as VecIntoIter};
 
 use hal::queue::QueueFamilyId;
 
@@ -28,14 +29,19 @@ impl<S> Family<S> {
         self.id
     }
 
-    /// Get iterator over references to queues
+    /// Iterate over immutable references to each queue in this family
     pub fn iter(&self) -> SliceIter<Queue<S>> {
         self.queues.iter()
     }
 
-    /// Get iterator over mutable references to queues
+    /// Iterate over mutable references to each queue in this family
     pub fn iter_mut(&mut self) -> SliceIterMut<Queue<S>> {
         self.queues.iter_mut()
+    }
+
+    /// Iterate over owned queue in this family
+    pub fn into_iter(self) -> VecIntoIter<Queue<S>> {
+        self.queues.into_iter()
     }
 
     /// Get reference to `Queue` instance by the id.
@@ -97,6 +103,33 @@ impl<S> Family<S> {
         assert_eq!(self.id, sid.family());
         self.queue_mut(sid.queue())
             .and_then(|queue| queue.submission_mut(sid))
+    }
+}
+
+impl<S> IntoIterator for Family<S> {
+    type Item = Queue<S>;
+    type IntoIter = VecIntoIter<Queue<S>>;
+
+    fn into_iter(self) -> VecIntoIter<Queue<S>> {
+        self.into_iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a Family<S> {
+    type Item = &'a Queue<S>;
+    type IntoIter = SliceIter<'a, Queue<S>>;
+
+    fn into_iter(self) -> SliceIter<'a, Queue<S>> {
+        self.iter()
+    }
+}
+
+impl<'a, S> IntoIterator for &'a mut Family<S> {
+    type Item = &'a mut Queue<S>;
+    type IntoIter = SliceIterMut<'a, Queue<S>>;
+
+    fn into_iter(self) -> SliceIterMut<'a, Queue<S>> {
+        self.iter_mut()
     }
 }
 

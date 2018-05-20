@@ -15,7 +15,7 @@ debug = 2
 
 [dependencies]
 derivative = "1.0"
-gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "54fe14fbb" }
+gfx-hal = { version = "0.1.0", git = "https://github.com/gfx-rs/gfx", rev = "d8e5d0cc3" }
 log = "0.4"
 
 [dev-dependencies]

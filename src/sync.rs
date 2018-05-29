@@ -14,9 +14,9 @@ use collect::{Chains, Unsynchronized};
 use resource::{Access, Buffer, Id, Image, Resource, State};
 use schedule::{QueueId, Schedule, SubmissionId};
 
-fn earlier_stage(stages: PipelineStage) -> PipelineStage {
-    PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
-}
+// fn earlier_stage(stages: PipelineStage) -> PipelineStage {
+//     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
+// }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Uid {
@@ -35,7 +35,6 @@ impl From<Id<Image>> for Uid {
         Uid::Image(id.index())
     }
 }
-
 
 /// Side of the submission. `Acquire` or `Release`.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
@@ -125,7 +124,7 @@ impl<S> Wait<S> {
     /// At this point `Signal` must be created as well.
     /// `id` and `point` combination must be unique.
     fn new(semaphore: S, stages: PipelineStage) -> Self {
-        Wait(semaphore, earlier_stage(stages))
+        Wait(semaphore, stages)
     }
 
     /// Get semaphore of the `Wait`.
@@ -452,7 +451,7 @@ fn sync_chain<R, S>(
     Guard<Semaphore, Semaphore>: Pick<R, Target = Barriers<R>>,
 {
     let uid = id.into();
-    for (prev_link, link) in chain.links().into_iter().skip(1).zip(chain.links().into_iter()) {
+    for (prev_link, link) in chain.links().windows(2).map(|pair| (&pair[0], &pair[1])) {
         if prev_link.family() == link.family() {
             // Prefer to generate barriers on the acquire side, if possible.
             if prev_link.single_queue() && !link.single_queue() {

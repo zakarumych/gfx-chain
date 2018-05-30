@@ -363,7 +363,8 @@ pub fn sync<F, S, W>(
                     match signals.get_mut(&semaphore) {
                         None => {
                             let (signal, wait) = new_semaphore();
-                            debug_assert!(waits.insert(semaphore, Some(wait)).is_none());
+                            let old = waits.insert(semaphore, Some(wait));
+                            assert!(old.is_none());
                             signal
                         }
                         Some(signal) => {
@@ -375,7 +376,8 @@ pub fn sync<F, S, W>(
                     match waits.get_mut(&semaphore) {
                         None => {
                             let (signal, wait) = new_semaphore();
-                            debug_assert!(signals.insert(semaphore, Some(signal)).is_none());
+                            let old = signals.insert(semaphore, Some(signal));
+                            assert!(old.is_none());
                             wait
                         }
                         Some(wait) => {
@@ -387,7 +389,8 @@ pub fn sync<F, S, W>(
             } else {
                 SyncData::new()
             };
-            debug_assert_eq!(sid, new_queue.add_submission(submission.set_sync(sync)));
+            let new_sid = new_queue.add_submission(submission.set_sync(sync));
+            assert_eq!(sid, new_sid);
         }
     }
 

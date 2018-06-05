@@ -24,6 +24,11 @@ impl<S> Family<S> {
         }
     }
 
+    /// The number of queues in this family.
+    pub fn queue_count(&self) -> usize {
+        self.queues.len()
+    }
+
     /// Get id of the family.
     pub fn id(&self) -> QueueFamilyId {
         self.id

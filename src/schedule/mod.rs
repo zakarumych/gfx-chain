@@ -36,6 +36,16 @@ impl<S> Schedule<S> {
         }
     }
 
+    /// The number of families in this schedule.
+    pub fn family_count(&self) -> usize {
+        self.map.len()
+    }
+
+    /// The number of queues in this schedule.
+    pub fn queue_count(&self) -> usize {
+        self.map.iter().map(|x| x.1.queue_count()).sum()
+    }
+
     /// Iterate over immutable references to families in this schedule.
     pub fn iter(&self) -> HashMapValues<QueueFamilyId, Family<S>> {
         self.map.values()

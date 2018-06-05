@@ -122,38 +122,55 @@ where
     }
 
     let mut scheduled = 0;
-    while !ready_passes.is_empty() {
-        // Among ready passes find best fit.
-        let (fitness, qid, index) = ready_passes
-            .iter()
-            .enumerate()
-            .map(|(index, &pass)| {
-                let (fitness, qid) = fitness(
-                    pass,
-                    &mut images,
-                    &mut buffers,
-                    &mut schedule,
-                );
-                (fitness, qid, index)
-            })
-            .min()
-            .unwrap();
+    if passes.queues.len() == 1 {
+        // With a single queue, wait_factor is always the number of scheduled passes, and
+        // transfers is always zero. Thus, we only need dependency resolution.
+        while let Some(pass) = ready_passes.pop() {
+            schedule_pass(
+                &mut ready_passes,
+                &mut unscheduled_passes,
+                &passes,
+                pass,
+                0,
+                scheduled,
+                &mut schedule,
+                &mut images,
+                &mut buffers,
+            );
+            scheduled += 1;
+        }
+    } else {
+        while !ready_passes.is_empty() {
+            // Among ready passes find best fit.
+            let (fitness, qid, index) = ready_passes
+                .iter()
+                .enumerate()
+                .map(|(index, &pass)| {
+                    let (fitness, qid) = fitness(
+                        pass,
+                        &mut images,
+                        &mut buffers,
+                        &mut schedule,
+                    );
+                    (fitness, qid, index)
+                })
+                .min()
+                .unwrap();
 
-        let pass = ready_passes.swap_remove(index);
-
-        schedule_pass(
-            &mut ready_passes,
-            &mut unscheduled_passes,
-            &passes,
-            pass,
-            qid,
-            fitness.wait_factor,
-            &mut schedule,
-            &mut images,
-            &mut buffers,
-        );
-
-        scheduled += 1;
+            let pass = ready_passes.swap_remove(index);
+            schedule_pass(
+                &mut ready_passes,
+                &mut unscheduled_passes,
+                &passes,
+                pass,
+                qid,
+                fitness.wait_factor,
+                &mut schedule,
+                &mut images,
+                &mut buffers,
+            );
+            scheduled += 1;
+        }
     }
     assert!(scheduled == passes.passes.len(), "Dependency loop found!");
 

@@ -349,7 +349,9 @@ pub fn sync<F, S, W>(
         sync_chain(id, chain, schedule, &mut sync);
     }
 
-    optimize(schedule, &mut sync);
+    if schedule.queue_count() > 1 {
+        optimize(schedule, &mut sync);
+    }
 
     let mut result = Schedule::default();
     let mut signals: HashMap<Semaphore, Option<S>> = HashMap::new();

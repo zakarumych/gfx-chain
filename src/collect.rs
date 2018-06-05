@@ -45,9 +45,21 @@ struct ResolvedPass {
     id: usize,
     family: QueueFamilyId,
     queues: Range<usize>,
-    deps: Vec<usize>,
+    rev_deps: Vec<usize>,
     buffers: Vec<(usize, StateUsage<Buffer>)>,
     images: Vec<(usize, StateUsage<Image>)>,
+}
+impl Default for ResolvedPass {
+    fn default() -> Self {
+        ResolvedPass {
+            id: 0,
+            family: QueueFamilyId(0),
+            queues: 0..0,
+            rev_deps: Vec::new(),
+            buffers: Vec::new(),
+            images: Vec::new(),
+        }
+    }
 }
 
 struct ResolvedPassSet {
@@ -87,10 +99,8 @@ where
     Q: Fn(QueueFamilyId) -> usize,
 {
     // Resolve passes into a form faster to work with.
-    let mut passes = resolve_passes(passes, max_queues);
-
-    // Track scheduled.
-    let mut scheduled: Vec<bool> = fill(passes.pass_ids.len());
+    let (passes, mut unscheduled_passes) = resolve_passes(passes, max_queues);
+    let mut ready_passes = Vec::new();
 
     // Chains.
     let mut images: Vec<ChainData<Image>> = fill(passes.images.len());
@@ -105,13 +115,19 @@ where
         });
     }
 
-    while !passes.passes.is_empty() {
+    for pass in &passes.passes {
+        if unscheduled_passes[pass.id] == 0 {
+            ready_passes.push(pass);
+        }
+    }
+
+    let mut scheduled = 0;
+    while !ready_passes.is_empty() {
         // Among ready passes find best fit.
-        let (fitness, qid, index) = passes.passes
+        let (fitness, qid, index) = ready_passes
             .iter()
             .enumerate()
-            .filter(|&(_, pass)| pass.deps.iter().all(|&x| scheduled[x]))
-            .map(|(index, pass)| {
+            .map(|(index, &pass)| {
                 let (fitness, qid) = fitness(
                     pass,
                     &mut images,
@@ -123,10 +139,11 @@ where
             .min()
             .unwrap();
 
-        let pass = passes.passes.swap_remove(index);
-        scheduled[pass.id] = true;
+        let pass = ready_passes.swap_remove(index);
 
         schedule_pass(
+            &mut ready_passes,
+            &mut unscheduled_passes,
             &passes,
             pass,
             qid,
@@ -135,7 +152,10 @@ where
             &mut images,
             &mut buffers,
         );
+
+        scheduled += 1;
     }
+    assert!(scheduled == passes.passes.len(), "Dependency loop found!");
 
     Chains {
         schedule: reify_schedule(&passes.queues, schedule),
@@ -175,11 +195,14 @@ impl <I : Hash + Eq + Copy> LookupBuilder<I> {
     }
 }
 
-fn resolve_passes<Q>(passes: Vec<Pass>, max_queues: Q) -> ResolvedPassSet
+fn resolve_passes<Q>(passes: Vec<Pass>, max_queues: Q) -> (ResolvedPassSet, Vec<usize>)
 where
     Q: Fn(QueueFamilyId) -> usize,
 {
-    let mut reified_passes = Vec::new();
+    let pass_count = passes.len();
+
+    let mut unscheduled_passes = fill(passes.len());
+    let mut reified_passes: Vec<ResolvedPass> = fill(passes.len());
     let mut pass_ids = LookupBuilder::new();
     let mut queues = LookupBuilder::new();
     let mut buffers = LookupBuilder::new();
@@ -200,30 +223,41 @@ where
             family_full.insert(family, full_range);
         }
 
-        reified_passes.push(ResolvedPass {
-            id: pass_ids.forward(pass.id),
-            family: pass.family,
-            queues: if let Some(queue) = pass.queue {
-                let id = queues
-                    .get(QueueId::new(family, queue))
-                    .expect("Requested queue out of range!");
-                id .. id + 1
-            } else {
-                family_full[&family].clone()
-            },
-            deps: pass.dependencies.into_iter().map(|p| pass_ids.forward(p)).collect(),
-            buffers: pass.buffers.into_iter().map(|(k, v)| (buffers.forward(k), v)).collect(),
-            images: pass.images.into_iter().map(|(k, v)| (images.forward(k), v)).collect(),
-        });
+        let id = pass_ids.forward(pass.id);
+        assert!(id < pass_count, "Dependency not found."); // This implies a dep is not there.
+        let unscheduled_count = pass.dependencies.len();
+
+        for dep in pass.dependencies {
+            // Duplicated dependencies work fine, since they push two rev_deps entries and add two
+            // to unscheduled_passes.
+            reified_passes[pass_ids.forward(dep)].rev_deps.push(id);
+        }
+        unscheduled_passes[id] = unscheduled_count;
+
+        // We set these manually, and notably, do *not* touch rev_deps.
+        reified_passes[id].id = id;
+        reified_passes[id].family = pass.family;
+        reified_passes[id].queues = if let Some(queue) = pass.queue {
+            let id = queues
+                .get(QueueId::new(family, queue))
+                .expect("Requested queue out of range!");
+            id .. id + 1
+        } else {
+            family_full[&family].clone()
+        };
+        reified_passes[id].buffers =
+            pass.buffers.into_iter().map(|(k, v)| (buffers.forward(k), v)).collect();
+        reified_passes[id].images =
+            pass.images.into_iter().map(|(k, v)| (images.forward(k), v)).collect();
     }
 
-    ResolvedPassSet {
+    (ResolvedPassSet {
         passes: reified_passes,
         pass_ids: pass_ids.backward,
         queues: queues.backward,
         buffers: buffers.backward,
         images: images.backward,
-    }
+    }, unscheduled_passes)
 }
 
 fn reify_chain<R: Resource>(ids: &[Id<R>], vec: Vec<ChainData<R>>) -> HashMap<Id<R>, Chain<R>> {
@@ -279,9 +313,11 @@ fn fitness(
     }, queue)
 }
 
-fn schedule_pass(
-    passes: &ResolvedPassSet,
-    pass: ResolvedPass,
+fn schedule_pass<'a>(
+    ready_passes: &mut Vec<&'a ResolvedPass>,
+    unscheduled_passes: &mut Vec<usize>,
+    passes: &'a ResolvedPassSet,
+    pass: &ResolvedPass,
     queue: usize,
     wait_factor: usize,
     schedule: &mut Vec<QueueData>,
@@ -294,15 +330,22 @@ fn schedule_pass(
     let sid = queue_data.queue.add_submission(Submission::new(wait_factor, pid, Unsynchronized));
     let ref mut submission = queue_data.queue[sid];
 
-    for (id, StateUsage { state, usage }) in pass.buffers {
+    for &(id, StateUsage { state, usage }) in &pass.buffers {
         add_to_chain(
             passes.buffers[id], pass.family, &mut buffers[id], sid, submission, state, usage,
         );
     }
-    for (id, StateUsage { state, usage }) in pass.images {
+    for &(id, StateUsage { state, usage }) in &pass.images {
         add_to_chain(
             passes.images[id], pass.family, &mut images[id], sid, submission, state, usage,
         );
+    }
+
+    for &rev_dep in &pass.rev_deps {
+        unscheduled_passes[rev_dep] -= 1;
+        if unscheduled_passes[rev_dep] == 0 {
+            ready_passes.push(&passes.passes[rev_dep]);
+        }
     }
 }
 

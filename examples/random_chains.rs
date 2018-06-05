@@ -1,9 +1,11 @@
 extern crate clap;
+extern crate fnv;
 extern crate gfx_hal as hal;
 extern crate gfx_chain;
 extern crate rand;
 
 use clap::{Arg, App, SubCommand};
+use fnv::FnvHashMap;
 use gfx_chain::chain::Chain;
 use gfx_chain::collect::{Chains, collect};
 use gfx_chain::pass::{Pass, PassId, StateUsage};
@@ -350,7 +352,7 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
     }
 
     fn check_pass_state<R: Resource>(
-        map: &HashMap<Id<R>, ResourceState<R>>, chains: &HashMap<Id<R>, Chain<R>>,
+        map: &HashMap<Id<R>, ResourceState<R>>, chains: &FnvHashMap<Id<R>, Chain<R>>,
         current_family: QueueFamilyId, id: Id<R>, expected_state: StateUsage<R>, link_id: usize,
     ) {
         let state = *map.get(&id).expect("Resource not in chain!");

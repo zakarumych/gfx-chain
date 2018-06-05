@@ -12,7 +12,8 @@ mod family;
 mod submission;
 mod queue;
 
-use std::collections::hash_map::{HashMap, Values as HashMapValues, ValuesMut as HashMapValuesMut,
+use fnv::FnvHashMap;
+use std::collections::hash_map::{Values as HashMapValues, ValuesMut as HashMapValuesMut,
                                  IntoIter as HashMapIntoIter};
 use std::ops::{Index, IndexMut};
 
@@ -25,14 +26,14 @@ pub use self::queue::{Queue, QueueId, QueueIter, QueueIterMut};
 /// All schedule on which passes were scheduled.
 #[derive(Debug)]
 pub struct Schedule<S> {
-    map: HashMap<QueueFamilyId, Family<S>>,
+    map: FnvHashMap<QueueFamilyId, Family<S>>,
 }
 
 impl<S> Schedule<S> {
     /// Create new empty `Schedule`
     pub fn new() -> Self {
         Schedule {
-            map: HashMap::new()
+            map: FnvHashMap::default(),
         }
     }
 

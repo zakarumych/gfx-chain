@@ -4,8 +4,8 @@
 //! `Chains` can be filled automatically by `schedule` function.
 //!
 
+use fnv::FnvHashMap;
 use std::cmp::max;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Range;
 use hal::queue::QueueFamilyId;
@@ -190,12 +190,12 @@ fn fill<T: Default>(num: usize) -> Vec<T> {
 }
 
 struct LookupBuilder<I : Hash + Eq + Copy> {
-    forward: HashMap<I, usize>,
+    forward: FnvHashMap<I, usize>,
     backward: Vec<I>,
 }
 impl <I : Hash + Eq + Copy> LookupBuilder<I> {
     fn new() -> LookupBuilder<I> {
-        LookupBuilder { forward: HashMap::new(), backward: Vec::new() }
+        LookupBuilder { forward: FnvHashMap::default(), backward: Vec::new() }
     }
     fn get(&mut self, id: I) -> Option<usize> {
         self.forward.get(&id).cloned()
@@ -225,7 +225,7 @@ where
     let mut buffers = LookupBuilder::new();
     let mut images = LookupBuilder::new();
 
-    let mut family_full = HashMap::new();
+    let mut family_full = FnvHashMap::default();
     for pass in passes {
         let family = pass.family;
         if !family_full.contains_key(&family) {
@@ -277,8 +277,8 @@ where
     }, unscheduled_passes)
 }
 
-fn reify_chain<R: Resource>(ids: &[Id<R>], vec: Vec<ChainData<R>>) -> HashMap<Id<R>, Chain<R>> {
-    let mut map = HashMap::with_capacity(vec.len());
+fn reify_chain<R: Resource>(ids: &[Id<R>], vec: Vec<ChainData<R>>) -> FnvHashMap<Id<R>, Chain<R>> {
+    let mut map = FnvHashMap::with_capacity_and_hasher(vec.len(), Default::default());
     for (chain, &i) in vec.into_iter().zip(ids) {
         map.insert(i, chain.chain);
     }
@@ -376,7 +376,7 @@ fn add_to_chain<R, S>(
     usage: R::Usage,
 ) where
     R: Resource,
-    Submission<S>: Pick<R, Target = HashMap<Id<R>, usize>>,
+    Submission<S>: Pick<R, Target = FnvHashMap<Id<R>, usize>>,
 {
     chain_data.current_family = Some(family);
     chain_data.current_link_wait_factor =

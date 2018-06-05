@@ -9,6 +9,7 @@
 #![deny(unused_must_use)]
 #![deny(dead_code)]
 
+extern crate fnv;
 extern crate gfx_hal as hal;
 
 use hal::queue::QueueFamilyId;

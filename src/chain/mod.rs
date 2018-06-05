@@ -7,7 +7,7 @@
 
 mod link;
 
-use std::collections::HashMap;
+use fnv::FnvHashMap;
 use std::ops::BitOr;
 use resource::{Buffer, Id, Image, Resource, Usage};
 
@@ -88,7 +88,7 @@ where
 }
 
 /// Type alias for map of chains by id for buffers.
-pub type BufferChains = HashMap<Id<Buffer>, Chain<Buffer>>;
+pub type BufferChains = FnvHashMap<Id<Buffer>, Chain<Buffer>>;
 
 /// Type alias for map of chains by id for images.
-pub type ImageChains = HashMap<Id<Image>, Chain<Image>>;
+pub type ImageChains = FnvHashMap<Id<Image>, Chain<Image>>;

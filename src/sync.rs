@@ -2,8 +2,8 @@
 //! This crates provide functions for find all required synchronizations (barriers and semaphores).
 //!
 
+use fnv::FnvHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::ops::{Range, RangeFrom, RangeTo};
 
 use hal::pso::PipelineStage;
@@ -198,7 +198,7 @@ where
 }
 
 /// Map of barriers by resource id.
-pub type Barriers<R> = HashMap<Id<R>, Barrier<R>>;
+pub type Barriers<R> = FnvHashMap<Id<R>, Barrier<R>>;
 
 /// Map of barriers by buffer id.
 pub type BufferBarriers = Barriers<Buffer>;
@@ -226,8 +226,8 @@ impl<S, W> Guard<S, W> {
     fn new() -> Self {
         Guard {
             wait: Vec::new(),
-            buffers: HashMap::new(),
-            images: HashMap::new(),
+            buffers: FnvHashMap::default(),
+            images: FnvHashMap::default(),
             signal: Vec::new(),
         }
     }
@@ -323,7 +323,7 @@ impl<S, W> SyncData<S, W> {
     }
 }
 
-struct SyncTemp(HashMap<SubmissionId, SyncData<Semaphore, Semaphore>>);
+struct SyncTemp(FnvHashMap<SubmissionId, SyncData<Semaphore, Semaphore>>);
 impl SyncTemp {
     fn get_sync(&mut self, sid: SubmissionId) -> &mut SyncData<Semaphore, Semaphore> {
         self.0.entry(sid).or_insert_with(|| SyncData::new())
@@ -341,7 +341,7 @@ pub fn sync<F, S, W>(
     let ref buffers = chains.buffers;
     let ref images = chains.images;
 
-    let mut sync = SyncTemp(HashMap::new());
+    let mut sync = SyncTemp(FnvHashMap::default());
     for (&id, chain) in buffers {
         sync_chain(id, chain, schedule, &mut sync);
     }
@@ -354,8 +354,8 @@ pub fn sync<F, S, W>(
     }
 
     let mut result = Schedule::default();
-    let mut signals: HashMap<Semaphore, Option<S>> = HashMap::new();
-    let mut waits: HashMap<Semaphore, Option<W>> = HashMap::new();
+    let mut signals: FnvHashMap<Semaphore, Option<S>> = FnvHashMap::default();
+    let mut waits: FnvHashMap<Semaphore, Option<W>> = FnvHashMap::default();
 
     for queue in schedule.iter().flat_map(|family| family.iter()) {
         let new_queue = result.ensure_queue(queue.id());
@@ -559,7 +559,7 @@ fn sync_chain<R, S>(
 fn optimize_side(
     guard: &mut Guard<Semaphore, Semaphore>,
     to_remove: &mut Vec<Semaphore>,
-    found: &mut HashMap<QueueId, (usize, Side)>,
+    found: &mut FnvHashMap<QueueId, (usize, Side)>,
 ) {
     guard.wait.sort_unstable_by_key(
         |wait| (wait.stage(),
@@ -586,7 +586,7 @@ fn optimize_side(
 fn optimize_submission(
     sid: SubmissionId,
     to_remove: &mut Vec<Semaphore>,
-    found: &mut HashMap<QueueId, (usize, Side)>,
+    found: &mut FnvHashMap<QueueId, (usize, Side)>,
     sync: &mut SyncTemp,
 ) {
     {
@@ -616,7 +616,7 @@ fn optimize<S>(
 ) {
     let mut to_remove = Vec::new();
     for queue in schedule.iter().flat_map(|family| family.iter()) {
-        let mut found = HashMap::new();
+        let mut found = FnvHashMap::default();
         for (sid, _) in queue.iter() {
             optimize_submission(sid, &mut to_remove, &mut found, sync);
         }

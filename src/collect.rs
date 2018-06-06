@@ -133,6 +133,7 @@ where
                 pass,
                 0,
                 scheduled,
+                scheduled,
                 &mut schedule,
                 &mut images,
                 &mut buffers,
@@ -165,6 +166,7 @@ where
                 pass,
                 qid,
                 fitness.wait_factor,
+                scheduled,
                 &mut schedule,
                 &mut images,
                 &mut buffers,
@@ -337,6 +339,7 @@ fn schedule_pass<'a>(
     pass: &ResolvedPass,
     queue: usize,
     wait_factor: usize,
+    submitted: usize,
     schedule: &mut Vec<QueueData>,
     images: &mut Vec<ChainData<Image>>,
     buffers: &mut Vec<ChainData<Buffer>>,
@@ -344,7 +347,8 @@ fn schedule_pass<'a>(
     let pid = passes.pass_ids[pass.id];
     let ref mut queue_data = schedule[queue];
     queue_data.wait_factor = max(queue_data.wait_factor, wait_factor + 1);
-    let sid = queue_data.queue.add_submission(Submission::new(wait_factor, pid, Unsynchronized));
+    let submission = Submission::new(wait_factor, submitted, pid, Unsynchronized);
+    let sid = queue_data.queue.add_submission(submission);
     let ref mut submission = queue_data.queue[sid];
 
     for &(id, StateUsage { state, usage }) in &pass.buffers {

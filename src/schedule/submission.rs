@@ -45,6 +45,7 @@ pub struct Submission<S> {
     images: FnvHashMap<Id<Image>, usize>,
     pass: PassId,
     wait_factor: usize,
+    submit_order: usize,
     sync: S,
 }
 
@@ -62,6 +63,11 @@ impl<S> Submission<S> {
     /// Get wait factor for `Submission`
     pub fn wait_factor(&self) -> usize {
         self.wait_factor
+    }
+
+    /// Get submit order for `Submission`
+    pub fn submit_order(&self) -> usize {
+        self.submit_order
     }
 
     /// Iterator over buffers
@@ -85,12 +91,13 @@ impl<S> Submission<S> {
     }
 
     /// Create new submission with specified pass.
-    pub(crate) fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
+    pub(crate) fn new(wait_factor: usize, submit_order: usize, pass: PassId, sync: S) -> Self {
         Submission {
             buffers: FnvHashMap::default(),
             images: FnvHashMap::default(),
             pass,
             wait_factor,
+            submit_order,
             sync,
         }
     }
@@ -102,6 +109,7 @@ impl<S> Submission<S> {
             images: self.images.clone(),
             pass: self.pass,
             wait_factor: self.wait_factor,
+            submit_order: self.submit_order,
             sync,
         }
     }

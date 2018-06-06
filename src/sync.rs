@@ -403,6 +403,8 @@ pub fn sync<F, S, W>(
     result
 }
 
+// submit_order creates a consistant direction in which semaphores are generated, avoiding issues
+// with deadlocks.
 fn latest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
@@ -410,13 +412,12 @@ where
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
             let sid = SubmissionId::new(qid, queue.last);
-            (schedule[sid].wait_factor(), sid)
+            (schedule[sid].submit_order(), sid)
         })
-        .max_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
+        .max_by_key(|&(submit_order, sid)| (submit_order, sid.queue().index()))
         .unwrap();
     sid
 }
-
 fn earliest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
@@ -424,9 +425,9 @@ where
     let (_, sid) = link.queues()
         .map(|(qid, queue)| {
             let sid = SubmissionId::new(qid, queue.first);
-            (schedule[sid].wait_factor(), sid)
+            (schedule[sid].submit_order(), sid)
         })
-        .min_by_key(|&(wait_factor, sid)| (wait_factor, sid.queue().index()))
+        .min_by_key(|&(submit_order, sid)| (submit_order, sid.queue().index()))
         .unwrap();
     sid
 }

@@ -4,10 +4,12 @@ extern crate gfx_chain;
 extern crate rand;
 
 use clap::{Arg, App, SubCommand};
-use gfx_chain::collect::collect;
+use gfx_chain::chain::Chain;
+use gfx_chain::collect::{Chains, collect};
 use gfx_chain::pass::{Pass, PassId, StateUsage};
-use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource, Usage};
-use gfx_chain::sync::sync;
+use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource, Usage, Layout};
+use gfx_chain::schedule::{QueueId, SubmissionId};
+use gfx_chain::sync::{SyncData, Barrier, sync};
 use hal::buffer::{Access as BufferAccess};
 use hal::image::{Access as ImageAccess, Layout as ImageLayout};
 use hal::pso::PipelineStage;
@@ -177,6 +179,304 @@ fn take_panic_info() -> Option<Option<String>> {
     unsafe { PANIC_INFO.take() }
 }
 
+// TODO: Verify pipeline stages are sane.
+
+fn fill<T: Default>(num: usize) -> Vec<T> {
+    let mut vec = Vec::with_capacity(num);
+    for _ in 0..num {
+        vec.push(T::default());
+    }
+    vec
+}
+
+#[derive(Copy, Clone, Debug)]
+enum ExecuteTarget {
+    Acquire(usize),
+    Pass(usize),
+    Release(usize),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum QueueStage {
+    BeforeAcquire(usize),
+    BeforePass(usize),
+    BeforeRelease(usize),
+    AllExecuted,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum ResourceOwner {
+    OnQueue(QueueFamilyId),
+    TransferringTo(QueueFamilyId),
+}
+
+#[derive(Copy, Clone, Debug)]
+struct ResourceState<R: Resource> {
+    access: R::Access,
+    layout: R::Layout,
+    owner : ResourceOwner,
+}
+
+struct ExecuteStatus<'a, 'b> {
+    chains: &'a Chains<SyncData<usize, usize>>,
+    passes: &'b Vec<Pass>,
+    log: bool,
+    queue_state: HashMap<QueueId, QueueStage>,
+    image_state: HashMap<Id<Image>, ResourceState<Image>>,
+    buffer_state: HashMap<Id<Buffer>, ResourceState<Buffer>>,
+    completed_passes: Vec<bool>,
+    signaled_semaphores: Vec<bool>,
+}
+impl <'a, 'b> ExecuteStatus<'a, 'b> {
+    pub fn new(
+        chains: &'a Chains<SyncData<usize, usize>>, passes: &'b Vec<Pass>,
+        semaphore_count: usize, log: bool,
+    ) -> Self {
+        if log {
+            println!("Test executing schedule...")
+        }
+
+        let mut queue_state = HashMap::new();
+        for queue in chains.schedule.iter().flat_map(|family| family.iter()) {
+            let qid = queue.id();
+            queue_state.insert(qid, if queue.len() == 0 {
+                QueueStage::AllExecuted
+            } else {
+                QueueStage::BeforeAcquire(0)
+            });
+        }
+
+        let mut buffer_state = HashMap::new();
+        for (&id, buffer) in &chains.buffers {
+            let link = buffer.link(0);
+            buffer_state.insert(id, ResourceState {
+                access: link.state().access,
+                layout: link.state().layout,
+                owner: ResourceOwner::OnQueue(link.family()),
+            });
+        }
+
+        let mut image_state = HashMap::new();
+        for (&id, image) in &chains.images {
+            let link = image.link(0);
+            image_state.insert(id, ResourceState {
+                access: link.state().access,
+                layout: link.state().layout,
+                owner: ResourceOwner::OnQueue(link.family()),
+            });
+        }
+
+        let completed_passes = fill(passes.len());
+        let signaled_semaphores = fill(semaphore_count);
+
+        ExecuteStatus {
+            chains, passes, log, queue_state,
+            image_state, buffer_state,
+            completed_passes, signaled_semaphores,
+        }
+    }
+
+    fn barrier_new_state<R: Resource>(
+        current_family: QueueFamilyId, barrier: &Barrier<R>, old_state: ResourceState<R>,
+    ) -> ResourceState<R> {
+        let mut new_state = old_state;
+        if let Some(ref transfer) = barrier.queues {
+            assert_ne!(transfer.start, transfer.end, "Transfer from family to itself!");
+            if transfer.start.family() == current_family {
+                assert_eq!(new_state.owner, ResourceOwner::OnQueue(current_family),
+                           "Attempting to transfer resource out from queue that doesn't own it.");
+                new_state.owner = ResourceOwner::TransferringTo(transfer.end.family());
+            } else if transfer.end.family() == current_family {
+                assert_eq!(new_state.owner, ResourceOwner::TransferringTo(transfer.end.family()),
+                           "Attempting to transfer resource in without related transfer out.");
+                new_state.owner = ResourceOwner::OnQueue(transfer.end.family());
+            } else {
+                panic!("Attempt to transfer resource from unrelated queue.");
+            }
+        }
+
+        if let ResourceOwner::OnQueue(_) = old_state.owner {
+            // TODO: Handle source = Undefined for images
+            assert_eq!(barrier.states.start.layout, old_state.layout,
+                       "Resource source layout does not match actual resource layout.");
+            new_state.layout = barrier.states.end.layout;
+        }
+
+        // TODO: Check that the transition done by the transfer out matches the transfer in
+
+        assert_eq!(barrier.states.start.access, old_state.access,
+                   "Resource source access flags do not match actual resource access.");
+        new_state.access = barrier.states.end.access;
+
+        new_state
+    }
+    fn execute_barrier<R: Resource>(
+        map: &mut HashMap<Id<R>, ResourceState<R>>,
+        current_family: QueueFamilyId, id: Id<R>, barrier: &Barrier<R>,
+    ) {
+        let old_state = *map.get(&id).expect("Resource not in chain!");
+        let new_state = Self::barrier_new_state(current_family, barrier, old_state);
+        map.insert(id, new_state);
+    }
+    fn can_execute_guard(&self, sid: SubmissionId, is_release: bool) -> bool {
+        let sync = self.chains.schedule.submission(sid).expect("Submission does not exist?");
+        let guard = if is_release { &sync.sync().release } else { &sync.sync().acquire };
+        guard.wait.iter().all(|wait| self.signaled_semaphores[*wait.semaphore()])
+    }
+    fn execute_guard(&mut self, sid: SubmissionId, is_release: bool) {
+        assert!(self.can_execute_guard(sid, is_release));
+
+        let sub = self.chains.schedule.submission(sid).expect("Submission does not exist?");
+        let guard = if is_release { &sub.sync().release } else { &sub.sync().acquire };
+        let pass_data = &self.passes[sub.pass().0];
+
+        if self.log {
+            println!(" - Executing {} guard for {:?} as {:?}",
+                     if is_release { "release" } else { "acquire" }, pass_data.id, sid);
+        }
+
+        for (&id, barrier) in &guard.buffers {
+            Self::execute_barrier(&mut self.buffer_state, sid.family(), id, barrier);
+        }
+        for (&id, barrier) in &guard.images {
+            Self::execute_barrier(&mut self.image_state, sid.family(), id, barrier);
+        }
+
+        for signal in &guard.signal {
+            let id = *signal.semaphore();
+            assert!(!self.signaled_semaphores[id], "Semaphore already signaled.");
+            self.signaled_semaphores[id] = true;
+        }
+    }
+
+    fn check_pass_state<R: Resource>(
+        map: &HashMap<Id<R>, ResourceState<R>>, chains: &HashMap<Id<R>, Chain<R>>,
+        current_family: QueueFamilyId, id: Id<R>, expected_state: StateUsage<R>, link_id: usize,
+    ) {
+        let state = *map.get(&id).expect("Resource not in chain!");
+        let link = chains.get(&id).expect("Resource not in chain!").link(link_id);
+
+        assert_eq!(state.owner, ResourceOwner::OnQueue(current_family),
+                   "Resource is not currently owned by the queue executing this pass.");
+        assert_eq!(state.layout, link.state().layout,
+                   "Current layout does not match layout specified in chain.");
+        assert!(state.layout.merge(expected_state.state.layout).is_some(),
+                "Current layout is not compatible with expected layout.");
+        assert_eq!(state.layout, link.state().layout,
+                   "Current access flags do not match flags specified in chain.");
+        assert_eq!(state.access & expected_state.state.access, expected_state.state.access,
+                   "Current access flags do not contain all expected access flags.");
+    }
+    fn execute_pass(&mut self, sid: SubmissionId) {
+        let sub = self.chains.schedule.submission(sid).expect("Submission does not exist?");
+        let pass_data = &self.passes[sub.pass().0];
+
+        if self.log {
+            println!(" - Executing main pass for {:?} as {:?}", pass_data.id, sid);
+        }
+
+        // TODO: Figure out what's reasonable to do with multiple queues.
+        // (This is too strong a restriction, chains doesn't guarantee this much.)
+        if self.queue_state.len() == 1 {
+            for dep in &pass_data.dependencies {
+                assert!(self.completed_passes[dep.0], "Dependant executed before dependency!");
+            }
+        }
+        for (&id, &state) in &pass_data.buffers {
+            Self::check_pass_state(&self.buffer_state, &self.chains.buffers,
+                                   sid.family(), id, state, sub.buffer(id));
+        }
+        for (&id, &state) in &pass_data.images {
+            Self::check_pass_state(&self.image_state, &self.chains.images,
+                                   sid.family(), id, state, sub.image(id));
+        }
+        self.completed_passes[sub.pass().0] = true;
+    }
+
+    fn can_execute(&self, qid: QueueId, target: ExecuteTarget) -> bool {
+        match target {
+            ExecuteTarget::Acquire(index) =>
+                self.can_execute_guard(SubmissionId::new(qid, index), false),
+            ExecuteTarget::Pass(_) =>
+                true,
+            ExecuteTarget::Release(index) =>
+                self.can_execute_guard(SubmissionId::new(qid, index), true),
+        }
+    }
+    fn execute(&mut self, qid: QueueId, target: ExecuteTarget) {
+        match target {
+            ExecuteTarget::Acquire(index) =>
+                self.execute_guard(SubmissionId::new(qid, index), false),
+            ExecuteTarget::Pass(index) =>
+                self.execute_pass(SubmissionId::new(qid, index)),
+            ExecuteTarget::Release(index) =>
+                self.execute_guard(SubmissionId::new(qid, index), true),
+        }
+    }
+
+    fn advance_queue(
+        queue_length: usize, stage: QueueStage,
+    ) -> Option<(ExecuteTarget, QueueStage)> {
+        if queue_length == 0 {
+            return None
+        }
+        match stage {
+            QueueStage::BeforeAcquire(index) =>
+                Some((ExecuteTarget::Acquire(index), QueueStage::BeforePass(index))),
+            QueueStage::BeforePass(index) =>
+                Some((ExecuteTarget::Pass(index), QueueStage::BeforeRelease(index))),
+            QueueStage::BeforeRelease(index) => if index == queue_length - 1 {
+                Some((ExecuteTarget::Release(index), QueueStage::AllExecuted))
+            } else {
+                Some((ExecuteTarget::Release(index), QueueStage::BeforeAcquire(index + 1)))
+            },
+            QueueStage::AllExecuted =>
+                None,
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        self.queue_state.values().all(|stage| *stage == QueueStage::AllExecuted)
+    }
+    fn execute_queue(&mut self, qid: QueueId) -> bool {
+        let queue_len =
+            self.chains.schedule.queue(qid).expect("Expected queue not in schedule.").len();
+        let stage = *self.queue_state.get(&qid).expect("Unknown queue?");
+        if let Some((execute_target, next_stage)) = Self::advance_queue(queue_len, stage) {
+            if self.can_execute(qid, execute_target) {
+                self.execute(qid, execute_target);
+                self.queue_state.insert(qid, next_stage);
+                return true
+            }
+        }
+        false
+    }
+    fn execute_random(&mut self, rng: &mut DefaultRng) {
+        let mut queues: Vec<_> = self.queue_state.keys().map(|x| *x).collect();
+        queues.sort();
+        rng.shuffle(&mut queues);
+        for queue in queues {
+            if self.execute_queue(queue) {
+                return
+            }
+        }
+        panic!("No queue could be executed.")
+    }
+    fn execute_all(mut self, rng: &mut DefaultRng) {
+        while !self.is_finished() {
+            self.execute_random(rng)
+        }
+    }
+}
+
+fn sanity_check(
+    rng: &mut DefaultRng,
+    chains: &Chains<SyncData<usize, usize>>, passes: &Vec<Pass>, semaphore_count: usize,
+    log: bool,
+) {
+    ExecuteStatus::new(chains, passes, semaphore_count, log).execute_all(rng)
+}
+
 #[derive(Copy, Clone)]
 struct BenchParams {
     family_count: usize, queues_per_family: usize,
@@ -242,11 +542,13 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
     if is_test {
         println!("Submissions: {:#?}", passes);
     }
-    rng.shuffle(&mut passes);
+
+    let mut shuffled_passes = passes.clone();
+    rng.shuffle(&mut shuffled_passes);
 
     let now = Instant::now();
     catch_unwind(AssertUnwindSafe(|| {
-        let chains = collect(passes, |QueueFamilyId(id)| max_queues[id]);
+        let chains = collect(shuffled_passes, |QueueFamilyId(id)| max_queues[id]);
         if is_test {
             println!("Unsynched chains: {:#?}", chains);
         }
@@ -261,6 +563,13 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
         if is_test {
             println!("Schedule: {:#?}", schedule);
             println!("Semaphore count: {}", semaphore_id);
+        }
+
+        let synched_chains = Chains {
+            schedule, buffers: chains.buffers, images: chains.images,
+        };
+        for _ in 0..10 {
+            sanity_check(rng, &synched_chains, &passes, semaphore_id, is_test);
         }
     })).ok();
     let duration = Instant::now().duration_since(now);

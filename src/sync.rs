@@ -509,7 +509,7 @@ fn sync_chain<R, S>(
 
             if !prev_link.single_queue() {
                 // Delay the last submission in the queue until other queues finish
-                for (queue_id, queue) in link.queues() {
+                for (queue_id, queue) in prev_link.queues() {
                     if queue_id != signal_sid.queue() {
                         let tail = SubmissionId::new(queue_id, queue.last);
                         generate_semaphore_pair(

@@ -158,7 +158,7 @@ where
     pub(crate) fn queue_state(&self, qid: QueueId) -> State<R> {
         let queue = self.queue(qid);
         State {
-            access: self.state.access,
+            access: queue.access,
             stages: queue.stages,
             .. self.state
         }

@@ -531,14 +531,16 @@ fn sync_chain<R, S>(
             sync.get_sync(signal_sid).release.pick_mut()
                 .insert(id, Barrier::release(
                     signal_sid.queue() .. wait_sid.queue(),
-                    prev_link.queue_state(signal_sid.queue()) ..,
+                    State { access: prev_link.state().access,
+                            ..prev_link.queue_state(signal_sid.queue()) } ..,
                     .. link.state().layout,
                 ));
             sync.get_sync(wait_sid).acquire.pick_mut()
                 .insert(id, Barrier::acquire(
                     signal_sid.queue() .. wait_sid.queue(),
                     prev_link.state().layout ..,
-                    .. link.queue_state(wait_sid.queue()),
+                    .. State { access: link.state().access,
+                               ..link.queue_state(wait_sid.queue()) },
                 ));
 
             if !link.single_queue() {

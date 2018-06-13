@@ -12,7 +12,8 @@ mod family;
 mod submission;
 mod queue;
 
-use std::collections::hash_map::{HashMap, Values as HashMapValues, ValuesMut as HashMapValuesMut,
+use fnv::FnvHashMap;
+use std::collections::hash_map::{Values as HashMapValues, ValuesMut as HashMapValuesMut,
                                  IntoIter as HashMapIntoIter};
 use std::ops::{Index, IndexMut};
 
@@ -25,15 +26,25 @@ pub use self::queue::{Queue, QueueId, QueueIter, QueueIterMut};
 /// All schedule on which passes were scheduled.
 #[derive(Debug)]
 pub struct Schedule<S> {
-    map: HashMap<QueueFamilyId, Family<S>>,
+    map: FnvHashMap<QueueFamilyId, Family<S>>,
 }
 
 impl<S> Schedule<S> {
     /// Create new empty `Schedule`
     pub fn new() -> Self {
         Schedule {
-            map: HashMap::new()
+            map: FnvHashMap::default(),
         }
+    }
+
+    /// The number of families in this schedule.
+    pub fn family_count(&self) -> usize {
+        self.map.len()
+    }
+
+    /// The number of queues in this schedule.
+    pub fn queue_count(&self) -> usize {
+        self.map.iter().map(|x| x.1.queue_count()).sum()
     }
 
     /// Iterate over immutable references to families in this schedule.

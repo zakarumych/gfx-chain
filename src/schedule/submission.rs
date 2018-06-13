@@ -1,4 +1,5 @@
-use std::collections::hash_map::{HashMap, Iter as HashMapIter};
+use fnv::FnvHashMap;
+use std::collections::hash_map::{Iter as HashMapIter};
 
 use hal::queue::QueueFamilyId;
 
@@ -40,10 +41,11 @@ impl SubmissionId {
 /// This type corresponds to commands that should be recorded into single primary command buffer.
 #[derive(Clone, Debug)]
 pub struct Submission<S> {
-    buffers: HashMap<Id<Buffer>, usize>,
-    images: HashMap<Id<Image>, usize>,
+    buffers: FnvHashMap<Id<Buffer>, usize>,
+    images: FnvHashMap<Id<Image>, usize>,
     pass: PassId,
     wait_factor: usize,
+    submit_order: usize,
     sync: S,
 }
 
@@ -61,6 +63,11 @@ impl<S> Submission<S> {
     /// Get wait factor for `Submission`
     pub fn wait_factor(&self) -> usize {
         self.wait_factor
+    }
+
+    /// Get submit order for `Submission`
+    pub fn submit_order(&self) -> usize {
+        self.submit_order
     }
 
     /// Iterator over buffers
@@ -84,12 +91,13 @@ impl<S> Submission<S> {
     }
 
     /// Create new submission with specified pass.
-    pub(crate) fn new(wait_factor: usize, pass: PassId, sync: S) -> Self {
+    pub(crate) fn new(wait_factor: usize, submit_order: usize, pass: PassId, sync: S) -> Self {
         Submission {
-            buffers: HashMap::new(),
-            images: HashMap::new(),
+            buffers: FnvHashMap::default(),
+            images: FnvHashMap::default(),
             pass,
             wait_factor,
+            submit_order,
             sync,
         }
     }
@@ -101,29 +109,30 @@ impl<S> Submission<S> {
             images: self.images.clone(),
             pass: self.pass,
             wait_factor: self.wait_factor,
+            submit_order: self.submit_order,
             sync,
         }
     }
 }
 
 impl<S> Pick<Buffer> for Submission<S> {
-    type Target = HashMap<Id<Buffer>, usize>;
+    type Target = FnvHashMap<Id<Buffer>, usize>;
 
-    fn pick(&self) -> &HashMap<Id<Buffer>, usize> {
+    fn pick(&self) -> &FnvHashMap<Id<Buffer>, usize> {
         &self.buffers
     }
-    fn pick_mut(&mut self) -> &mut HashMap<Id<Buffer>, usize> {
+    fn pick_mut(&mut self) -> &mut FnvHashMap<Id<Buffer>, usize> {
         &mut self.buffers
     }
 }
 
 impl<S> Pick<Image> for Submission<S> {
-    type Target = HashMap<Id<Image>, usize>;
+    type Target = FnvHashMap<Id<Image>, usize>;
 
-    fn pick(&self) -> &HashMap<Id<Image>, usize> {
+    fn pick(&self) -> &FnvHashMap<Id<Image>, usize> {
         &self.images
     }
-    fn pick_mut(&mut self) -> &mut HashMap<Id<Image>, usize> {
+    fn pick_mut(&mut self) -> &mut FnvHashMap<Id<Image>, usize> {
         &mut self.images
     }
 }

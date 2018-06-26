@@ -1,26 +1,26 @@
 extern crate clap;
 extern crate fnv;
-extern crate gfx_hal as hal;
 extern crate gfx_chain;
+extern crate gfx_hal as hal;
 extern crate rand;
 
-use clap::{Arg, App, SubCommand};
+use clap::{App, Arg, SubCommand};
 use fnv::FnvHashMap;
 use gfx_chain::chain::Chain;
-use gfx_chain::collect::{Chains, collect};
+use gfx_chain::collect::{collect, Chains};
 use gfx_chain::pass::{Pass, PassId, StateUsage};
-use gfx_chain::resource::{Buffer, BufferLayout, State, Id, Image, Resource, Usage, Layout};
+use gfx_chain::resource::{Buffer, BufferLayout, Id, Image, Layout, Resource, State, Usage};
 use gfx_chain::schedule::{QueueId, SubmissionId};
-use gfx_chain::sync::{SyncData, Barrier, sync};
-use hal::buffer::{Access as BufferAccess};
+use gfx_chain::sync::{sync, Barrier, SyncData};
+use hal::buffer::Access as BufferAccess;
 use hal::image::{Access as ImageAccess, Layout as ImageLayout};
 use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
-use rand::{Rng, SeedableRng, OsRng, Isaac64Rng};
+use rand::{Isaac64Rng, OsRng, Rng, SeedableRng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, set_hook, AssertUnwindSafe};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 type DefaultRng = Isaac64Rng;
 
@@ -55,7 +55,7 @@ fn create_buffer_access_single(rng: &mut DefaultRng) -> BufferAccess {
         BufferAccess::HOST_WRITE,
         BufferAccess::MEMORY_READ,
         BufferAccess::MEMORY_WRITE,
-      ]).unwrap()
+    ]).unwrap()
 }
 fn create_buffer_access(rng: &mut DefaultRng) -> BufferAccess {
     let mut access = BufferAccess::empty();
@@ -104,7 +104,8 @@ fn create_image_layout(rng: &mut DefaultRng) -> ImageLayout {
 }
 
 fn create_pipeline_stage_single(rng: &mut DefaultRng) -> PipelineStage {
-    *rng.choose(&[PipelineStage::DRAW_INDIRECT,
+    *rng.choose(&[
+        PipelineStage::DRAW_INDIRECT,
         PipelineStage::VERTEX_INPUT,
         PipelineStage::VERTEX_SHADER,
         PipelineStage::HULL_SHADER,
@@ -154,14 +155,23 @@ fn create_deps(rng: &mut DefaultRng, i: usize) -> Vec<PassId> {
 }
 
 fn create_resc_deps<R: Resource, F: Fn(&mut DefaultRng) -> State<R>>(
-    rng: &mut DefaultRng, count: u32, used: &mut HashSet<Id<R>>, new_state: F,
+    rng: &mut DefaultRng,
+    count: u32,
+    used: &mut HashSet<Id<R>>,
+    new_state: F,
 ) -> HashMap<Id<R>, StateUsage<R>> {
     let mut map = HashMap::new();
     if count != 0 {
         for _ in 0..gen_inclusive_u32(rng, 1, min(count, 4)) {
             let id = Id::new(rng.gen_range(0, count));
             used.insert(id);
-            map.insert(id, StateUsage { state: new_state(rng), usage: R::Usage::none() });
+            map.insert(
+                id,
+                StateUsage {
+                    state: new_state(rng),
+                    usage: R::Usage::none(),
+                },
+            );
         }
     }
     map
@@ -216,7 +226,7 @@ enum ResourceOwner {
 struct ResourceState<R: Resource> {
     access: R::Access,
     layout: R::Layout,
-    owner : ResourceOwner,
+    owner: ResourceOwner,
 }
 
 struct ExecuteStatus<'a, 'b> {
@@ -229,10 +239,12 @@ struct ExecuteStatus<'a, 'b> {
     completed_passes: Vec<bool>,
     signaled_semaphores: Vec<bool>,
 }
-impl <'a, 'b> ExecuteStatus<'a, 'b> {
+impl<'a, 'b> ExecuteStatus<'a, 'b> {
     pub fn new(
-        chains: &'a Chains<SyncData<usize, usize>>, passes: &'b Vec<Pass>,
-        semaphore_count: usize, log: bool,
+        chains: &'a Chains<SyncData<usize, usize>>,
+        passes: &'b Vec<Pass>,
+        semaphore_count: usize,
+        log: bool,
     ) -> Self {
         if log {
             println!("Test executing schedule...")
@@ -241,56 +253,81 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
         let mut queue_state = HashMap::new();
         for queue in chains.schedule.iter().flat_map(|family| family.iter()) {
             let qid = queue.id();
-            queue_state.insert(qid, if queue.len() == 0 {
-                QueueStage::AllExecuted
-            } else {
-                QueueStage::BeforeAcquire(0)
-            });
+            queue_state.insert(
+                qid,
+                if queue.len() == 0 {
+                    QueueStage::AllExecuted
+                } else {
+                    QueueStage::BeforeAcquire(0)
+                },
+            );
         }
 
         let mut buffer_state = HashMap::new();
         for (&id, buffer) in &chains.buffers {
             let link = buffer.link(0);
-            buffer_state.insert(id, ResourceState {
-                access: link.state().access,
-                layout: link.state().layout,
-                owner: ResourceOwner::OnQueue(link.family()),
-            });
+            buffer_state.insert(
+                id,
+                ResourceState {
+                    access: link.state().access,
+                    layout: link.state().layout,
+                    owner: ResourceOwner::OnQueue(link.family()),
+                },
+            );
         }
 
         let mut image_state = HashMap::new();
         for (&id, image) in &chains.images {
             let link = image.link(0);
-            image_state.insert(id, ResourceState {
-                access: link.state().access,
-                layout: link.state().layout,
-                owner: ResourceOwner::OnQueue(link.family()),
-            });
+            image_state.insert(
+                id,
+                ResourceState {
+                    access: link.state().access,
+                    layout: link.state().layout,
+                    owner: ResourceOwner::OnQueue(link.family()),
+                },
+            );
         }
 
         let completed_passes = fill(passes.len());
         let signaled_semaphores = fill(semaphore_count);
 
         ExecuteStatus {
-            chains, passes, log, queue_state,
-            image_state, buffer_state,
-            completed_passes, signaled_semaphores,
+            chains,
+            passes,
+            log,
+            queue_state,
+            image_state,
+            buffer_state,
+            completed_passes,
+            signaled_semaphores,
         }
     }
 
     fn barrier_new_state<R: Resource>(
-        current_family: QueueFamilyId, barrier: &Barrier<R>, old_state: ResourceState<R>,
+        current_family: QueueFamilyId,
+        barrier: &Barrier<R>,
+        old_state: ResourceState<R>,
     ) -> ResourceState<R> {
         let mut new_state = old_state;
         if let Some(ref transfer) = barrier.queues {
-            assert_ne!(transfer.start, transfer.end, "Transfer from family to itself!");
+            assert_ne!(
+                transfer.start, transfer.end,
+                "Transfer from family to itself!"
+            );
             if transfer.start.family() == current_family {
-                assert_eq!(new_state.owner, ResourceOwner::OnQueue(current_family),
-                           "Attempting to transfer resource out from queue that doesn't own it.");
+                assert_eq!(
+                    new_state.owner,
+                    ResourceOwner::OnQueue(current_family),
+                    "Attempting to transfer resource out from queue that doesn't own it."
+                );
                 new_state.owner = ResourceOwner::TransferringTo(transfer.end.family());
             } else if transfer.end.family() == current_family {
-                assert_eq!(new_state.owner, ResourceOwner::TransferringTo(transfer.end.family()),
-                           "Attempting to transfer resource in without related transfer out.");
+                assert_eq!(
+                    new_state.owner,
+                    ResourceOwner::TransferringTo(transfer.end.family()),
+                    "Attempting to transfer resource in without related transfer out."
+                );
                 new_state.owner = ResourceOwner::OnQueue(transfer.end.family());
             } else {
                 panic!("Attempt to transfer resource from unrelated queue.");
@@ -299,42 +336,71 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
 
         if let ResourceOwner::OnQueue(_) = old_state.owner {
             // TODO: Handle source = Undefined for images
-            assert_eq!(barrier.states.start.layout, old_state.layout,
-                       "Resource source layout does not match actual resource layout.");
+            assert_eq!(
+                barrier.states.start.layout, old_state.layout,
+                "Resource source layout does not match actual resource layout."
+            );
             new_state.layout = barrier.states.end.layout;
         }
 
         // TODO: Check that the transition done by the transfer out matches the transfer in
 
-        assert_eq!(barrier.states.start.access, old_state.access,
-                   "Resource source access flags do not match actual resource access.");
+        assert_eq!(
+            barrier.states.start.access, old_state.access,
+            "Resource source access flags do not match actual resource access."
+        );
         new_state.access = barrier.states.end.access;
 
         new_state
     }
     fn execute_barrier<R: Resource>(
         map: &mut HashMap<Id<R>, ResourceState<R>>,
-        current_family: QueueFamilyId, id: Id<R>, barrier: &Barrier<R>,
+        current_family: QueueFamilyId,
+        id: Id<R>,
+        barrier: &Barrier<R>,
     ) {
         let old_state = *map.get(&id).expect("Resource not in chain!");
         let new_state = Self::barrier_new_state(current_family, barrier, old_state);
         map.insert(id, new_state);
     }
     fn can_execute_guard(&self, sid: SubmissionId, is_release: bool) -> bool {
-        let sync = self.chains.schedule.submission(sid).expect("Submission does not exist?");
-        let guard = if is_release { &sync.sync().release } else { &sync.sync().acquire };
-        guard.wait.iter().all(|wait| self.signaled_semaphores[*wait.semaphore()])
+        let sync = self
+            .chains
+            .schedule
+            .submission(sid)
+            .expect("Submission does not exist?");
+        let guard = if is_release {
+            &sync.sync().release
+        } else {
+            &sync.sync().acquire
+        };
+        guard
+            .wait
+            .iter()
+            .all(|wait| self.signaled_semaphores[*wait.semaphore()])
     }
     fn execute_guard(&mut self, sid: SubmissionId, is_release: bool) {
         assert!(self.can_execute_guard(sid, is_release));
 
-        let sub = self.chains.schedule.submission(sid).expect("Submission does not exist?");
-        let guard = if is_release { &sub.sync().release } else { &sub.sync().acquire };
+        let sub = self
+            .chains
+            .schedule
+            .submission(sid)
+            .expect("Submission does not exist?");
+        let guard = if is_release {
+            &sub.sync().release
+        } else {
+            &sub.sync().acquire
+        };
         let pass_data = &self.passes[sub.pass().0];
 
         if self.log {
-            println!(" - Executing {} guard for {:?} as {:?}",
-                     if is_release { "release" } else { "acquire" }, pass_data.id, sid);
+            println!(
+                " - Executing {} guard for {:?} as {:?}",
+                if is_release { "release" } else { "acquire" },
+                pass_data.id,
+                sid
+            );
         }
 
         for (&id, barrier) in &guard.buffers {
@@ -352,25 +418,50 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
     }
 
     fn check_pass_state<R: Resource>(
-        map: &HashMap<Id<R>, ResourceState<R>>, chains: &FnvHashMap<Id<R>, Chain<R>>,
-        current_family: QueueFamilyId, id: Id<R>, expected_state: StateUsage<R>, link_id: usize,
+        map: &HashMap<Id<R>, ResourceState<R>>,
+        chains: &FnvHashMap<Id<R>, Chain<R>>,
+        current_family: QueueFamilyId,
+        id: Id<R>,
+        expected_state: StateUsage<R>,
+        link_id: usize,
     ) {
         let state = *map.get(&id).expect("Resource not in chain!");
-        let link = chains.get(&id).expect("Resource not in chain!").link(link_id);
+        let link = chains
+            .get(&id)
+            .expect("Resource not in chain!")
+            .link(link_id);
 
-        assert_eq!(state.owner, ResourceOwner::OnQueue(current_family),
-                   "Resource is not currently owned by the queue executing this pass.");
-        assert_eq!(state.layout, link.state().layout,
-                   "Current layout does not match layout specified in chain.");
-        assert!(state.layout.merge(expected_state.state.layout).is_some(),
-                "Current layout is not compatible with expected layout.");
-        assert_eq!(state.layout, link.state().layout,
-                   "Current access flags do not match flags specified in chain.");
-        assert_eq!(state.access & expected_state.state.access, expected_state.state.access,
-                   "Current access flags do not contain all expected access flags.");
+        assert_eq!(
+            state.owner,
+            ResourceOwner::OnQueue(current_family),
+            "Resource is not currently owned by the queue executing this pass."
+        );
+        assert_eq!(
+            state.layout,
+            link.state().layout,
+            "Current layout does not match layout specified in chain."
+        );
+        assert!(
+            state.layout.merge(expected_state.state.layout).is_some(),
+            "Current layout is not compatible with expected layout."
+        );
+        assert_eq!(
+            state.layout,
+            link.state().layout,
+            "Current access flags do not match flags specified in chain."
+        );
+        assert_eq!(
+            state.access & expected_state.state.access,
+            expected_state.state.access,
+            "Current access flags do not contain all expected access flags."
+        );
     }
     fn execute_pass(&mut self, sid: SubmissionId) {
-        let sub = self.chains.schedule.submission(sid).expect("Submission does not exist?");
+        let sub = self
+            .chains
+            .schedule
+            .submission(sid)
+            .expect("Submission does not exist?");
         let pass_data = &self.passes[sub.pass().0];
 
         if self.log {
@@ -381,74 +472,102 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
         // (This is too strong a restriction, chains doesn't guarantee this much.)
         if self.queue_state.len() == 1 {
             for dep in &pass_data.dependencies {
-                assert!(self.completed_passes[dep.0], "Dependant executed before dependency!");
+                assert!(
+                    self.completed_passes[dep.0],
+                    "Dependant executed before dependency!"
+                );
             }
         }
         for (&id, &state) in &pass_data.buffers {
-            Self::check_pass_state(&self.buffer_state, &self.chains.buffers,
-                                   sid.family(), id, state, sub.buffer(id));
+            Self::check_pass_state(
+                &self.buffer_state,
+                &self.chains.buffers,
+                sid.family(),
+                id,
+                state,
+                sub.buffer(id),
+            );
         }
         for (&id, &state) in &pass_data.images {
-            Self::check_pass_state(&self.image_state, &self.chains.images,
-                                   sid.family(), id, state, sub.image(id));
+            Self::check_pass_state(
+                &self.image_state,
+                &self.chains.images,
+                sid.family(),
+                id,
+                state,
+                sub.image(id),
+            );
         }
         self.completed_passes[sub.pass().0] = true;
     }
 
     fn can_execute(&self, qid: QueueId, target: ExecuteTarget) -> bool {
         match target {
-            ExecuteTarget::Acquire(index) =>
-                self.can_execute_guard(SubmissionId::new(qid, index), false),
-            ExecuteTarget::Pass(_) =>
-                true,
-            ExecuteTarget::Release(index) =>
-                self.can_execute_guard(SubmissionId::new(qid, index), true),
+            ExecuteTarget::Acquire(index) => {
+                self.can_execute_guard(SubmissionId::new(qid, index), false)
+            }
+            ExecuteTarget::Pass(_) => true,
+            ExecuteTarget::Release(index) => {
+                self.can_execute_guard(SubmissionId::new(qid, index), true)
+            }
         }
     }
     fn execute(&mut self, qid: QueueId, target: ExecuteTarget) {
         match target {
-            ExecuteTarget::Acquire(index) =>
-                self.execute_guard(SubmissionId::new(qid, index), false),
-            ExecuteTarget::Pass(index) =>
-                self.execute_pass(SubmissionId::new(qid, index)),
-            ExecuteTarget::Release(index) =>
-                self.execute_guard(SubmissionId::new(qid, index), true),
+            ExecuteTarget::Acquire(index) => {
+                self.execute_guard(SubmissionId::new(qid, index), false)
+            }
+            ExecuteTarget::Pass(index) => self.execute_pass(SubmissionId::new(qid, index)),
+            ExecuteTarget::Release(index) => {
+                self.execute_guard(SubmissionId::new(qid, index), true)
+            }
         }
     }
 
     fn advance_queue(
-        queue_length: usize, stage: QueueStage,
+        queue_length: usize,
+        stage: QueueStage,
     ) -> Option<(ExecuteTarget, QueueStage)> {
         if queue_length == 0 {
-            return None
+            return None;
         }
         match stage {
-            QueueStage::BeforeAcquire(index) =>
-                Some((ExecuteTarget::Acquire(index), QueueStage::BeforePass(index))),
-            QueueStage::BeforePass(index) =>
-                Some((ExecuteTarget::Pass(index), QueueStage::BeforeRelease(index))),
+            QueueStage::BeforeAcquire(index) => {
+                Some((ExecuteTarget::Acquire(index), QueueStage::BeforePass(index)))
+            }
+            QueueStage::BeforePass(index) => {
+                Some((ExecuteTarget::Pass(index), QueueStage::BeforeRelease(index)))
+            }
             QueueStage::BeforeRelease(index) => if index == queue_length - 1 {
                 Some((ExecuteTarget::Release(index), QueueStage::AllExecuted))
             } else {
-                Some((ExecuteTarget::Release(index), QueueStage::BeforeAcquire(index + 1)))
+                Some((
+                    ExecuteTarget::Release(index),
+                    QueueStage::BeforeAcquire(index + 1),
+                ))
             },
-            QueueStage::AllExecuted =>
-                None,
+            QueueStage::AllExecuted => None,
         }
     }
 
     fn is_finished(&self) -> bool {
-        self.queue_state.values().all(|stage| *stage == QueueStage::AllExecuted)
+        self.queue_state
+            .values()
+            .all(|stage| *stage == QueueStage::AllExecuted)
     }
     fn execute_queue(&mut self, qid: QueueId) -> bool {
-        let queue_len =
-            self.chains.schedule.queue(qid).expect("Expected queue not in schedule.").len();
+        let queue_len = self
+            .chains
+            .schedule
+            .queue(qid)
+            .expect("Expected queue not in schedule.")
+            .len();
         let stage = *self.queue_state.get(&qid).expect("Unknown queue?");
         if let Some((execute_target, next_stage)) = Self::advance_queue(queue_len, stage) {
             if self.can_execute(qid, execute_target) {
                 self.execute(qid, execute_target);
                 self.queue_state.insert(qid, next_stage);
-                return true
+                return true;
             }
         }
         false
@@ -459,7 +578,7 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
         rng.shuffle(&mut queues);
         for queue in queues {
             if self.execute_queue(queue) {
-                return
+                return;
             }
         }
         panic!("No queue could be executed.")
@@ -473,7 +592,9 @@ impl <'a, 'b> ExecuteStatus<'a, 'b> {
 
 fn sanity_check(
     rng: &mut DefaultRng,
-    chains: &Chains<SyncData<usize, usize>>, passes: &Vec<Pass>, semaphore_count: usize,
+    chains: &Chains<SyncData<usize, usize>>,
+    passes: &Vec<Pass>,
+    semaphore_count: usize,
     log: bool,
 ) {
     ExecuteStatus::new(chains, passes, semaphore_count, log).execute_all(rng)
@@ -481,8 +602,11 @@ fn sanity_check(
 
 #[derive(Copy, Clone)]
 struct BenchParams {
-    family_count: usize, queues_per_family: usize,
-    buffer_count: u32, image_count: u32, submit_count: usize,
+    family_count: usize,
+    queues_per_family: usize,
+    buffer_count: u32,
+    image_count: u32,
+    submit_count: usize,
 }
 
 fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Duration) {
@@ -495,17 +619,26 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
     let rng = &mut rng;
 
     let (family_count, buffer_count, image_count, submit_count) = if let Some(bench) = bench {
-        (bench.family_count, bench.buffer_count, bench.image_count, bench.submit_count)
+        (
+            bench.family_count,
+            bench.buffer_count,
+            bench.image_count,
+            bench.submit_count,
+        )
     } else {
-        (gen_inclusive_prefer_low(rng, 1, 4),
-         gen_inclusive_u32(rng, 0, 10),
-         gen_inclusive_u32(rng, 0, 10),
-         gen_inclusive(rng, 1, 25))
+        (
+            gen_inclusive_prefer_low(rng, 1, 4),
+            gen_inclusive_u32(rng, 0, 10),
+            gen_inclusive_u32(rng, 0, 10),
+            gen_inclusive(rng, 1, 25),
+        )
     };
 
     if is_test {
-        println!("Creating test case with {} families, {} buffers, {} images, and {} submissions.",
-                 family_count, buffer_count, image_count, submit_count);
+        println!(
+            "Creating test case with {} families, {} buffers, {} images, and {} submissions.",
+            family_count, buffer_count, image_count, submit_count
+        );
     }
 
     let mut max_queues = Vec::new();
@@ -528,17 +661,28 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
     let mut pass_complexity = 0;
     for i in 0..submit_count {
         let family = QueueFamilyId(rng.gen_range(0, family_count));
-        let queue = if gen_bool(rng) { Some(rng.gen_range(0, max_queues[family.0])) } else { None };
+        let queue = if gen_bool(rng) {
+            Some(rng.gen_range(0, max_queues[family.0]))
+        } else {
+            None
+        };
         let dependencies = create_deps(rng, i);
         let buffers = create_resc_deps(rng, buffer_count, &mut used_buffers, create_buffer_state);
         let images = create_resc_deps(rng, image_count, &mut used_images, create_image_state);
 
         used_families.insert(family);
-        if queue.is_some() { pass_complexity += 1; }
+        if queue.is_some() {
+            pass_complexity += 1;
+        }
         pass_complexity += dependencies.len() + buffers.len() + images.len();
 
         passes.push(Pass {
-            id: PassId(i), family, queue, dependencies, buffers, images,
+            id: PassId(i),
+            family,
+            queue,
+            dependencies,
+            buffers,
+            images,
         })
     }
     if is_test {
@@ -568,7 +712,9 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
         }
 
         let synched_chains = Chains {
-            schedule, buffers: chains.buffers, images: chains.images,
+            schedule,
+            buffers: chains.buffers,
+            images: chains.images,
         };
         for _ in 0..10 {
             sanity_check(rng, &synched_chains, &passes, semaphore_id, is_test);
@@ -583,7 +729,10 @@ fn test_run(seed: u64, is_test: bool, bench: Option<BenchParams>) -> (usize, Dur
 
     let queue_score = (used_families.len() - 1) * 10 + (queue_count - 1) as usize;
     let object_score = submit_count + used_buffers.len() + used_images.len();
-    (queue_score * 100 + object_score * 10 + pass_complexity, duration)
+    (
+        queue_score * 100 + object_score * 10 + pass_complexity,
+        duration,
+    )
 }
 fn run_bench(os_rng: &mut OsRng, bench: &str, params: BenchParams) {
     let now = Instant::now();
@@ -602,22 +751,28 @@ fn run_bench(os_rng: &mut OsRng, bench: &str, params: BenchParams) {
     let mean_ms = total_ms / iters as f64;
     let variance_ms = (total_ms_sq / iters as f64) - mean_ms * mean_ms;
     let std_ms = variance_ms.abs().sqrt();
-    println!("{}: {:-6} iters ran in average {:.3} ± {:.3} ms ({:.2}% ± {:.2}% of 16.6 ms)",
-             bench, iters,
-             mean_ms, std_ms,
-             mean_ms / 16.6 * 100.0, std_ms / 16.6 * 100.0);
+    println!(
+        "{}: {:-6} iters ran in average {:.3} ± {:.3} ms ({:.2}% ± {:.2}% of 16.6 ms)",
+        bench,
+        iters,
+        mean_ms,
+        std_ms,
+        mean_ms / 16.6 * 100.0,
+        std_ms / 16.6 * 100.0
+    );
 }
 
 fn main() {
     let mut app = App::new("gfx-chains random tester")
-                           .subcommand(SubCommand::with_name("test")
-                                       .about("Tests a random chain, printing all results.")
-                                       .arg(Arg::with_name("SEED")
-                                            .help("optional fixed seed").index(1)))
-                           .subcommand(SubCommand::with_name("bench")
-                                       .about("Benchmarks large random chains."))
-                           .subcommand(SubCommand::with_name("fuzz")
-                                       .about("Tests random chains, to find panicking cases."));
+        .subcommand(
+            SubCommand::with_name("test")
+                .about("Tests a random chain, printing all results.")
+                .arg(Arg::with_name("SEED").help("optional fixed seed").index(1)),
+        )
+        .subcommand(SubCommand::with_name("bench").about("Benchmarks large random chains."))
+        .subcommand(
+            SubCommand::with_name("fuzz").about("Tests random chains, to find panicking cases."),
+        );
     let matches = app.clone().get_matches();
 
     let mut os_rng = OsRng::new().unwrap();
@@ -632,7 +787,7 @@ fn main() {
                 test_run(os_rng.next_u64(), true, None);
             }
         }
-        return
+        return;
     }
     if let Some(_) = matches.subcommand_matches("bench") {
         for &(load_name, resc_count, submit_count) in &[
@@ -642,17 +797,21 @@ fn main() {
             ("large ", 50, 1000),
             ("huge  ", 50, 1500),
         ] {
-            for &(queue_name, queue_count) in &[
-                ("single-queue", 1),
-                ("multi-queue ", 3)
-            ] {
-                run_bench(&mut os_rng, &format!("{} + {}", load_name, queue_name), BenchParams {
-                    family_count: queue_count, queues_per_family: queue_count,
-                    buffer_count: resc_count, image_count: resc_count, submit_count,
-                });
+            for &(queue_name, queue_count) in &[("single-queue", 1), ("multi-queue ", 3)] {
+                run_bench(
+                    &mut os_rng,
+                    &format!("{} + {}", load_name, queue_name),
+                    BenchParams {
+                        family_count: queue_count,
+                        queues_per_family: queue_count,
+                        buffer_count: resc_count,
+                        image_count: resc_count,
+                        submit_count,
+                    },
+                );
             }
         }
-        return
+        return;
     }
     if let Some(_) = matches.subcommand_matches("fuzz") {
         install_fuzz_panic_hook();
@@ -665,22 +824,29 @@ fn main() {
                     if simplest_examples.contains_key(&location) {
                         let entry = simplest_examples.get_mut(&location).unwrap();
                         if example_complexity < *entry {
-                            println!("Simpler example found for panic at {}. \
-                                      Seed = {}, Example complexity = {}",
-                                     location, seed, example_complexity);
+                            println!(
+                                "Simpler example found for panic at {}. \
+                                 Seed = {}, Example complexity = {}",
+                                location, seed, example_complexity
+                            );
                             *entry = example_complexity;
                         }
                     } else {
-                        println!("/!\\ New panic found at {}. Seed = {}, Example complexity = {}",
-                                 location, seed, example_complexity);
+                        println!(
+                            "/!\\ New panic found at {}. Seed = {}, Example complexity = {}",
+                            location, seed, example_complexity
+                        );
                         simplest_examples.insert(location, example_complexity);
                     }
                 }
                 Some(None) => {
-                    println!("/!\\ New panic found at unknown location. Seed = {}, \
-                              Example complexity = {}", seed, example_complexity);
+                    println!(
+                        "/!\\ New panic found at unknown location. Seed = {}, \
+                         Example complexity = {}",
+                        seed, example_complexity
+                    );
                 }
-                None => { }
+                None => {}
             }
         }
     }

@@ -1,5 +1,5 @@
 use std::iter::Enumerate;
-use std::slice::{Iter as SliceIter};
+use std::slice::Iter as SliceIter;
 
 use hal::pso::PipelineStage;
 use hal::queue::QueueFamilyId;
@@ -160,7 +160,7 @@ where
         State {
             access: queue.access,
             stages: queue.stages,
-            .. self.state
+            ..self.state
         }
     }
 
@@ -181,7 +181,7 @@ impl<'a, R: Resource + 'a> Iterator for QueuesIter<'a, R> {
     fn next(&mut self) -> Option<(QueueId, &'a LinkQueueState<R>)> {
         while let Some((index, state)) = self.iter.next() {
             if let &Some(ref queue) = state {
-                return Some((QueueId::new(self.family, index), queue))
+                return Some((QueueId::new(self.family, index), queue));
             }
         }
         None

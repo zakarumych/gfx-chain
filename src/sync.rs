@@ -8,11 +8,11 @@ use std::ops::{Range, RangeFrom, RangeTo};
 
 use hal::pso::PipelineStage;
 
-use Pick;
 use chain::{Chain, Link};
 use collect::{Chains, Unsynchronized};
 use resource::{Access, Buffer, Id, Image, Resource, State};
 use schedule::{QueueId, Schedule, SubmissionId};
+use Pick;
 
 // fn earlier_stage(stages: PipelineStage) -> PipelineStage {
 //     PipelineStage::from_bits((stages.bits() - 1) ^ (stages.bits())).unwrap()
@@ -88,10 +88,7 @@ struct Semaphore {
 
 impl Semaphore {
     fn new(id: Uid, points: Range<Point>) -> Self {
-        Semaphore {
-            id,
-            points,
-        }
+        Semaphore { id, points }
     }
 }
 
@@ -289,13 +286,23 @@ impl<S, W> SyncData<S, W> {
         SyncData {
             acquire: Guard {
                 wait: self.acquire.wait,
-                signal: self.acquire.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
+                signal: self
+                    .acquire
+                    .signal
+                    .into_iter()
+                    .map(|Signal(semaphore)| Signal(f(semaphore)))
+                    .collect(),
                 buffers: self.acquire.buffers,
                 images: self.acquire.images,
             },
             release: Guard {
                 wait: self.release.wait,
-                signal: self.release.signal.into_iter().map(|Signal(semaphore)| Signal(f(semaphore))).collect(),
+                signal: self
+                    .release
+                    .signal
+                    .into_iter()
+                    .map(|Signal(semaphore)| Signal(f(semaphore)))
+                    .collect(),
                 buffers: self.release.buffers,
                 images: self.release.images,
             },
@@ -308,13 +315,23 @@ impl<S, W> SyncData<S, W> {
     {
         SyncData {
             acquire: Guard {
-                wait: self.acquire.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
+                wait: self
+                    .acquire
+                    .wait
+                    .into_iter()
+                    .map(|Wait(semaphore, stage)| Wait(f(semaphore), stage))
+                    .collect(),
                 signal: self.acquire.signal,
                 buffers: self.acquire.buffers,
                 images: self.acquire.images,
             },
             release: Guard {
-                wait: self.release.wait.into_iter().map(|Wait(semaphore, stage)| Wait(f(semaphore), stage)).collect(),
+                wait: self
+                    .release
+                    .wait
+                    .into_iter()
+                    .map(|Wait(semaphore, stage)| Wait(f(semaphore), stage))
+                    .collect(),
                 signal: self.release.signal,
                 buffers: self.release.buffers,
                 images: self.release.images,
@@ -334,7 +351,8 @@ impl SyncTemp {
 pub fn sync<F, S, W>(
     chains: &Chains<Unsynchronized>,
     mut new_semaphore: F,
-) -> Schedule<SyncData<S, W>> where
+) -> Schedule<SyncData<S, W>>
+where
     F: FnMut() -> (S, W),
 {
     let ref schedule = chains.schedule;
@@ -361,31 +379,23 @@ pub fn sync<F, S, W>(
         let new_queue = result.ensure_queue(queue.id());
         for (sid, submission) in queue.iter() {
             let sync = if let Some(sync) = sync.0.remove(&sid) {
-                let sync = sync.convert_signal(|semaphore| {
-                    match signals.get_mut(&semaphore) {
-                        None => {
-                            let (signal, wait) = new_semaphore();
-                            let old = waits.insert(semaphore, Some(wait));
-                            assert!(old.is_none());
-                            signal
-                        }
-                        Some(signal) => {
-                            signal.take().unwrap()
-                        }
+                let sync = sync.convert_signal(|semaphore| match signals.get_mut(&semaphore) {
+                    None => {
+                        let (signal, wait) = new_semaphore();
+                        let old = waits.insert(semaphore, Some(wait));
+                        assert!(old.is_none());
+                        signal
                     }
+                    Some(signal) => signal.take().unwrap(),
                 });
-                let sync = sync.convert_wait(|semaphore| {
-                    match waits.get_mut(&semaphore) {
-                        None => {
-                            let (signal, wait) = new_semaphore();
-                            let old = signals.insert(semaphore, Some(signal));
-                            assert!(old.is_none());
-                            wait
-                        }
-                        Some(wait) => {
-                            wait.take().unwrap()
-                        }
+                let sync = sync.convert_wait(|semaphore| match waits.get_mut(&semaphore) {
+                    None => {
+                        let (signal, wait) = new_semaphore();
+                        let old = signals.insert(semaphore, Some(signal));
+                        assert!(old.is_none());
+                        wait
                     }
+                    Some(wait) => wait.take().unwrap(),
                 });
                 sync
             } else {
@@ -409,7 +419,8 @@ fn latest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
 {
-    let (_, sid) = link.queues()
+    let (_, sid) = link
+        .queues()
         .map(|(qid, queue)| {
             let sid = SubmissionId::new(qid, queue.last);
             (schedule[sid].submit_order(), sid)
@@ -422,7 +433,8 @@ fn earliest<R, S>(link: &Link<R>, schedule: &Schedule<S>) -> SubmissionId
 where
     R: Resource,
 {
-    let (_, sid) = link.queues()
+    let (_, sid) = link
+        .queues()
         .map(|(qid, queue)| {
             let sid = SubmissionId::new(qid, queue.first);
             (schedule[sid].submit_order(), sid)
@@ -433,25 +445,31 @@ where
 }
 
 fn generate_semaphore_pair<R: Resource>(
-    sync: &mut SyncTemp, id: Uid, link: &Link<R>,
-    range: Range<SubmissionId>, sides: Range<Side>,
+    sync: &mut SyncTemp,
+    id: Uid,
+    link: &Link<R>,
+    range: Range<SubmissionId>,
+    sides: Range<Side>,
 ) {
-    let points = Point::new(range.start, sides.start) .. Point::new(range.end, sides.end);
+    let points = Point::new(range.start, sides.start)..Point::new(range.end, sides.end);
     if points.start.sid.queue() != points.end.sid.queue() {
         let semaphore = Semaphore::new(id, points.clone());
-        sync.get_sync(points.start.sid).get_mut(points.start.side).signal
+        sync.get_sync(points.start.sid)
+            .get_mut(points.start.side)
+            .signal
             .push(Signal::new(semaphore.clone()));
-        sync.get_sync(points.end.sid).get_mut(points.end.side).wait
-            .push(Wait::new(semaphore, link.queue(points.end.sid.queue()).stages));
+        sync.get_sync(points.end.sid)
+            .get_mut(points.end.side)
+            .wait
+            .push(Wait::new(
+                semaphore,
+                link.queue(points.end.sid.queue()).stages,
+            ));
     }
 }
 
-fn sync_chain<R, S>(
-    id: Id<R>,
-    chain: &Chain<R>,
-    schedule: &Schedule<S>,
-    sync: &mut SyncTemp,
-) where
+fn sync_chain<R, S>(id: Id<R>, chain: &Chain<R>, schedule: &Schedule<S>, sync: &mut SyncTemp)
+where
     R: Resource,
     Id<R>: Into<Uid>,
     Guard<Semaphore, Semaphore>: Pick<R, Target = Barriers<R>>,
@@ -464,15 +482,20 @@ fn sync_chain<R, S>(
                 let signal_sid = latest(prev_link, schedule);
 
                 // Generate barrier in prev link's last submission.
-                sync.get_sync(signal_sid).release.pick_mut()
+                sync.get_sync(signal_sid)
+                    .release
+                    .pick_mut()
                     .insert(id, Barrier::new(prev_link.state()..link.state()));
 
                 // Generate semaphores between queues in the previous link and the current one.
                 for (queue_id, queue) in link.queues() {
                     let head = SubmissionId::new(queue_id, queue.first);
                     generate_semaphore_pair(
-                        sync, uid, link,
-                        signal_sid .. head, Side::Release .. Side::Acquire,
+                        sync,
+                        uid,
+                        link,
+                        signal_sid..head,
+                        Side::Release..Side::Acquire,
                     );
                 }
             } else {
@@ -482,13 +505,18 @@ fn sync_chain<R, S>(
                 for (queue_id, queue) in prev_link.queues() {
                     let tail = SubmissionId::new(queue_id, queue.last);
                     generate_semaphore_pair(
-                        sync, uid, link,
-                        tail .. wait_sid, Side::Release .. Side::Acquire,
+                        sync,
+                        uid,
+                        link,
+                        tail..wait_sid,
+                        Side::Release..Side::Acquire,
                     );
                 }
 
                 // Generate barrier in next link's first submission.
-                sync.get_sync(wait_sid).acquire.pick_mut()
+                sync.get_sync(wait_sid)
+                    .acquire
+                    .pick_mut()
                     .insert(id, Barrier::new(prev_link.state()..link.state()));
 
                 if !link.single_queue() {
@@ -497,8 +525,11 @@ fn sync_chain<R, S>(
                         if queue_id != wait_sid.queue() {
                             let head = SubmissionId::new(queue_id, queue.first);
                             generate_semaphore_pair(
-                                sync, uid, link,
-                                wait_sid .. head, Side::Acquire .. Side::Acquire,
+                                sync,
+                                uid,
+                                link,
+                                wait_sid..head,
+                                Side::Acquire..Side::Acquire,
                             );
                         }
                     }
@@ -514,8 +545,11 @@ fn sync_chain<R, S>(
                     if queue_id != signal_sid.queue() {
                         let tail = SubmissionId::new(queue_id, queue.last);
                         generate_semaphore_pair(
-                            sync, uid, prev_link,
-                            tail .. signal_sid, Side::Release .. Side::Release,
+                            sync,
+                            uid,
+                            prev_link,
+                            tail..signal_sid,
+                            Side::Release..Side::Release,
                         );
                     }
                 }
@@ -523,25 +557,36 @@ fn sync_chain<R, S>(
 
             // Generate a semaphore between the signal and wait sides of the transfer.
             generate_semaphore_pair(
-                sync, uid, link,
-                signal_sid .. wait_sid, Side::Release .. Side::Acquire,
+                sync,
+                uid,
+                link,
+                signal_sid..wait_sid,
+                Side::Release..Side::Acquire,
             );
 
             // Generate barriers to transfer the resource to another queue.
-            sync.get_sync(signal_sid).release.pick_mut()
-                .insert(id, Barrier::release(
-                    signal_sid.queue() .. wait_sid.queue(),
-                    State { access: prev_link.state().access,
-                            ..prev_link.queue_state(signal_sid.queue()) } ..,
-                    .. link.state().layout,
-                ));
-            sync.get_sync(wait_sid).acquire.pick_mut()
-                .insert(id, Barrier::acquire(
-                    signal_sid.queue() .. wait_sid.queue(),
-                    prev_link.state().layout ..,
-                    .. State { access: link.state().access,
-                               ..link.queue_state(wait_sid.queue()) },
-                ));
+            sync.get_sync(signal_sid).release.pick_mut().insert(
+                id,
+                Barrier::release(
+                    signal_sid.queue()..wait_sid.queue(),
+                    State {
+                        access: prev_link.state().access,
+                        ..prev_link.queue_state(signal_sid.queue())
+                    }..,
+                    ..link.state().layout,
+                ),
+            );
+            sync.get_sync(wait_sid).acquire.pick_mut().insert(
+                id,
+                Barrier::acquire(
+                    signal_sid.queue()..wait_sid.queue(),
+                    prev_link.state().layout..,
+                    ..State {
+                        access: link.state().access,
+                        ..link.queue_state(wait_sid.queue())
+                    },
+                ),
+            );
 
             if !link.single_queue() {
                 // Delay other queues in the link until the barrier finishes
@@ -549,8 +594,11 @@ fn sync_chain<R, S>(
                     if queue_id != wait_sid.queue() {
                         let head = SubmissionId::new(queue_id, queue.first);
                         generate_semaphore_pair(
-                            sync, uid, link,
-                            wait_sid .. head, Side::Acquire .. Side::Acquire,
+                            sync,
+                            uid,
+                            link,
+                            wait_sid..head,
+                            Side::Acquire..Side::Acquire,
                         );
                     }
                 }
@@ -564,20 +612,19 @@ fn optimize_side(
     to_remove: &mut Vec<Semaphore>,
     found: &mut FnvHashMap<QueueId, (usize, Side)>,
 ) {
-    guard.wait.sort_unstable_by_key(
-        |wait| (wait.stage(),
-                wait.semaphore().points.end.sid.index())
-    );
+    guard
+        .wait
+        .sort_unstable_by_key(|wait| (wait.stage(), wait.semaphore().points.end.sid.index()));
     guard.wait.retain(|wait| {
         let start = wait.semaphore().points.start;
         let pos = (start.sid.index(), start.side);
         if let Some(synched_to) = found.get_mut(&start.sid.queue()) {
             if *synched_to >= pos {
                 to_remove.push(wait.semaphore().clone());
-                return false
+                return false;
             } else {
                 *synched_to = pos;
-                return true
+                return true;
             }
         }
 
@@ -598,25 +645,27 @@ fn optimize_submission(
             optimize_side(&mut sync_data.acquire, to_remove, found);
             optimize_side(&mut sync_data.release, to_remove, found);
         } else {
-            return
+            return;
         }
     }
 
     for semaphore in to_remove.drain(..) {
         // Delete signal as well.
-        let ref mut signal = sync.0.get_mut(&semaphore.points.start.sid)
+        let ref mut signal = sync
+            .0
+            .get_mut(&semaphore.points.start.sid)
             .unwrap()
             .get_mut(semaphore.points.start.side)
             .signal;
-        let index = signal.iter().position(|signal| signal.0 == semaphore).unwrap();
+        let index = signal
+            .iter()
+            .position(|signal| signal.0 == semaphore)
+            .unwrap();
         signal.swap_remove(index);
     }
 }
 
-fn optimize<S>(
-    schedule: &Schedule<S>,
-    sync: &mut SyncTemp,
-) {
+fn optimize<S>(schedule: &Schedule<S>, sync: &mut SyncTemp) {
     let mut to_remove = Vec::new();
     for queue in schedule.iter().flat_map(|family| family.iter()) {
         let mut found = FnvHashMap::default();

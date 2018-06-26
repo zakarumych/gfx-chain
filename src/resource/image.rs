@@ -13,15 +13,19 @@ impl Access for ImageAccess {
     fn is_write(&self) -> bool {
         self.contains(Self::COLOR_ATTACHMENT_WRITE)
             || self.contains(Self::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            || self.contains(Self::TRANSFER_WRITE) || self.contains(Self::SHADER_WRITE)
-            || self.contains(Self::HOST_WRITE) || self.contains(Self::MEMORY_WRITE)
+            || self.contains(Self::TRANSFER_WRITE)
+            || self.contains(Self::SHADER_WRITE)
+            || self.contains(Self::HOST_WRITE)
+            || self.contains(Self::MEMORY_WRITE)
     }
 
     fn is_read(&self) -> bool {
         self.contains(Self::COLOR_ATTACHMENT_READ)
             || self.contains(Self::DEPTH_STENCIL_ATTACHMENT_READ)
-            || self.contains(Self::TRANSFER_READ) || self.contains(Self::SHADER_READ)
-            || self.contains(Self::HOST_READ) || self.contains(Self::MEMORY_READ)
+            || self.contains(Self::TRANSFER_READ)
+            || self.contains(Self::SHADER_READ)
+            || self.contains(Self::HOST_READ)
+            || self.contains(Self::MEMORY_READ)
             || self.contains(Self::INPUT_ATTACHMENT_READ)
     }
 

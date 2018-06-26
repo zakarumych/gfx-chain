@@ -1,11 +1,11 @@
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
-use std::vec::{IntoIter as VecIntoIter};
+use std::vec::IntoIter as VecIntoIter;
 
 use hal::queue::QueueFamilyId;
 
-use super::submission::{Submission, SubmissionId};
 use super::queue::{Queue, QueueId};
+use super::submission::{Submission, SubmissionId};
 
 /// Instances of this type contains array of `Queue`s.
 /// All contained queues has identical capabilities.

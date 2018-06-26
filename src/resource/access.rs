@@ -1,11 +1,11 @@
+use hal::pso::PipelineStage;
 use std::fmt::Debug;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
-use hal::pso::PipelineStage;
 
 /// Access type combination
-pub trait Access: Debug + Copy + Eq +
-                  BitAnd<Output = Self> + BitAndAssign +
-                  BitOr<Output = Self> + BitOrAssign {
+pub trait Access:
+    Debug + Copy + Eq + BitAnd<Output = Self> + BitAndAssign + BitOr<Output = Self> + BitOrAssign
+{
     /// Create empty combinations of access types.
     fn none() -> Self;
 

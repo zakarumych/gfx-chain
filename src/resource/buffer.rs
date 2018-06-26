@@ -13,13 +13,17 @@ impl Access for BufferAccess {
     }
 
     fn is_write(&self) -> bool {
-        self.contains(Self::TRANSFER_WRITE) || self.contains(Self::SHADER_WRITE)
-            || self.contains(Self::HOST_WRITE) || self.contains(Self::MEMORY_WRITE)
+        self.contains(Self::TRANSFER_WRITE)
+            || self.contains(Self::SHADER_WRITE)
+            || self.contains(Self::HOST_WRITE)
+            || self.contains(Self::MEMORY_WRITE)
     }
 
     fn is_read(&self) -> bool {
-        self.contains(Self::TRANSFER_READ) || self.contains(Self::SHADER_READ)
-            || self.contains(Self::HOST_READ) || self.contains(Self::MEMORY_READ)
+        self.contains(Self::TRANSFER_READ)
+            || self.contains(Self::SHADER_READ)
+            || self.contains(Self::HOST_READ)
+            || self.contains(Self::MEMORY_READ)
             || self.contains(Self::INDEX_BUFFER_READ)
             || self.contains(Self::VERTEX_BUFFER_READ)
             || self.contains(Self::INDIRECT_COMMAND_READ)

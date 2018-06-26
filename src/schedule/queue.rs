@@ -1,7 +1,7 @@
 use std::iter::{DoubleEndedIterator, Enumerate, ExactSizeIterator};
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
-use std::vec::{IntoIter as VecIntoIter};
+use std::vec::IntoIter as VecIntoIter;
 
 use hal::queue::QueueFamilyId;
 

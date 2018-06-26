@@ -8,8 +8,8 @@
 mod link;
 
 use fnv::FnvHashMap;
-use std::ops::BitOr;
 use resource::{Buffer, Id, Image, Resource, Usage};
+use std::ops::BitOr;
 
 pub use self::link::Link;
 
@@ -31,9 +31,7 @@ where
 
     /// Create new empty `Chain`
     pub fn new() -> Self {
-        Chain {
-            links: Vec::new(),
-        }
+        Chain { links: Vec::new() }
     }
 
     /// Get links slice
@@ -83,7 +81,10 @@ where
 
     /// Get total usage.
     pub fn usage(&self) -> R::Usage {
-        self.links.iter().map(Link::usage).fold(R::Usage::none(), BitOr::bitor)
+        self.links
+            .iter()
+            .map(Link::usage)
+            .fold(R::Usage::none(), BitOr::bitor)
     }
 }
 

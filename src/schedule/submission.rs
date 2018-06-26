@@ -1,11 +1,11 @@
 use fnv::FnvHashMap;
-use std::collections::hash_map::{Iter as HashMapIter};
+use std::collections::hash_map::Iter as HashMapIter;
 
 use hal::queue::QueueFamilyId;
 
-use Pick;
-use resource::{Buffer, Id, Image};
 use pass::PassId;
+use resource::{Buffer, Id, Image};
+use Pick;
 
 use super::QueueId;
 

@@ -3,9 +3,9 @@
 //! synchronize execution of passes.
 //!
 
-use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use hal::queue::QueueFamilyId;
-use resource::{Buffer, Id, Image, State, Resource};
+use resource::{Buffer, Id, Image, Resource, State};
+use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 
 /// Id of the pass.
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]

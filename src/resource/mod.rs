@@ -9,13 +9,15 @@ mod image;
 mod layout;
 mod usage;
 
+use hal::buffer::{Access as BufferAccess, Usage as BufferUsage};
+use hal::image::{
+    Access as ImageAccess, Layout as ImageLayout, SubresourceRange, Usage as ImageUsage,
+};
+use hal::pso::PipelineStage;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Range;
-use hal::buffer::{Access as BufferAccess, Usage as BufferUsage};
-use hal::image::{Access as ImageAccess, Layout as ImageLayout, SubresourceRange, Usage as ImageUsage};
-use hal::pso::PipelineStage;
 
 pub use self::access::Access;
 pub use self::buffer::BufferLayout;

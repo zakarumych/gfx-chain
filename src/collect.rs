@@ -5,18 +5,18 @@
 //!
 
 use fnv::FnvHashMap;
+use hal::queue::QueueFamilyId;
 use std::cmp::max;
 use std::hash::Hash;
 use std::ops::Range;
-use hal::queue::QueueFamilyId;
 
 use chain::{BufferChains, Chain, ImageChains, Link};
 use pass::{Pass, PassId, StateUsage};
 use resource::{Buffer, Image, Resource, State};
 
-use Pick;
 use resource::Id;
 use schedule::{Queue, QueueId, Schedule, Submission, SubmissionId};
+use Pick;
 
 /// Placeholder for synchronization type.
 #[derive(Debug)]
@@ -76,7 +76,7 @@ struct ChainData<R: Resource> {
     current_link_wait_factor: usize,
     current_family: Option<QueueFamilyId>,
 }
-impl <R: Resource> Default for ChainData<R> {
+impl<R: Resource> Default for ChainData<R> {
     fn default() -> Self {
         ChainData {
             chain: Chain::new(),
@@ -147,12 +147,7 @@ where
                 .iter()
                 .enumerate()
                 .map(|(index, &pass)| {
-                    let (fitness, qid) = fitness(
-                        pass,
-                        &mut images,
-                        &mut buffers,
-                        &mut schedule,
-                    );
+                    let (fitness, qid) = fitness(pass, &mut images, &mut buffers, &mut schedule);
                     (fitness, qid, index)
                 })
                 .min()
@@ -191,13 +186,16 @@ fn fill<T: Default>(num: usize) -> Vec<T> {
     vec
 }
 
-struct LookupBuilder<I : Hash + Eq + Copy> {
+struct LookupBuilder<I: Hash + Eq + Copy> {
     forward: FnvHashMap<I, usize>,
     backward: Vec<I>,
 }
-impl <I : Hash + Eq + Copy> LookupBuilder<I> {
+impl<I: Hash + Eq + Copy> LookupBuilder<I> {
     fn new() -> LookupBuilder<I> {
-        LookupBuilder { forward: FnvHashMap::default(), backward: Vec::new() }
+        LookupBuilder {
+            forward: FnvHashMap::default(),
+            backward: Vec::new(),
+        }
     }
     fn get(&mut self, id: I) -> Option<usize> {
         self.forward.get(&id).cloned()
@@ -237,8 +235,8 @@ where
                 queues.forward(QueueId::new(family, i));
             }
 
-            let full_range = queues.forward(QueueId::new(family, 0)) ..
-                             queues.forward(QueueId::new(family, count - 1)) + 1;
+            let full_range = queues.forward(QueueId::new(family, 0))
+                ..queues.forward(QueueId::new(family, count - 1)) + 1;
             family_full.insert(family, full_range);
         }
 
@@ -260,23 +258,32 @@ where
             let id = queues
                 .get(QueueId::new(family, queue))
                 .expect("Requested queue out of range!");
-            id .. id + 1
+            id..id + 1
         } else {
             family_full[&family].clone()
         };
-        reified_passes[id].buffers =
-            pass.buffers.into_iter().map(|(k, v)| (buffers.forward(k), v)).collect();
-        reified_passes[id].images =
-            pass.images.into_iter().map(|(k, v)| (images.forward(k), v)).collect();
+        reified_passes[id].buffers = pass
+            .buffers
+            .into_iter()
+            .map(|(k, v)| (buffers.forward(k), v))
+            .collect();
+        reified_passes[id].images = pass
+            .images
+            .into_iter()
+            .map(|(k, v)| (images.forward(k), v))
+            .collect();
     }
 
-    (ResolvedPassSet {
-        passes: reified_passes,
-        pass_ids: pass_ids.backward,
-        queues: queues.backward,
-        buffers: buffers.backward,
-        images: images.backward,
-    }, unscheduled_passes)
+    (
+        ResolvedPassSet {
+            passes: reified_passes,
+            pass_ids: pass_ids.backward,
+            queues: queues.backward,
+            buffers: buffers.backward,
+            images: images.backward,
+        },
+        unscheduled_passes,
+    )
 }
 
 fn reify_chain<R: Resource>(ids: &[Id<R>], vec: Vec<ChainData<R>>) -> FnvHashMap<Id<R>, Chain<R>> {
@@ -321,15 +328,19 @@ fn fitness(
     }
 
     // Find best queue for pass.
-    let (wait_factor_from_queue, queue) =
-        pass.queues.clone()
-            .map(|index| (schedule[index].wait_factor, index))
-            .min()
-            .unwrap();
-    (Fitness {
-        transfers,
-        wait_factor: max(wait_factor_from_chains, wait_factor_from_queue),
-    }, queue)
+    let (wait_factor_from_queue, queue) = pass
+        .queues
+        .clone()
+        .map(|index| (schedule[index].wait_factor, index))
+        .min()
+        .unwrap();
+    (
+        Fitness {
+            transfers,
+            wait_factor: max(wait_factor_from_chains, wait_factor_from_queue),
+        },
+        queue,
+    )
 }
 
 fn schedule_pass<'a>(
@@ -353,12 +364,24 @@ fn schedule_pass<'a>(
 
     for &(id, StateUsage { state, usage }) in &pass.buffers {
         add_to_chain(
-            passes.buffers[id], pass.family, &mut buffers[id], sid, submission, state, usage,
+            passes.buffers[id],
+            pass.family,
+            &mut buffers[id],
+            sid,
+            submission,
+            state,
+            usage,
         );
     }
     for &(id, StateUsage { state, usage }) in &pass.images {
         add_to_chain(
-            passes.images[id], pass.family, &mut images[id], sid, submission, state, usage,
+            passes.images[id],
+            pass.family,
+            &mut images[id],
+            sid,
+            submission,
+            state,
+            usage,
         );
     }
 
@@ -383,8 +406,10 @@ fn add_to_chain<R, S>(
     Submission<S>: Pick<R, Target = FnvHashMap<Id<R>, usize>>,
 {
     chain_data.current_family = Some(family);
-    chain_data.current_link_wait_factor =
-        max(submission.wait_factor() + 1, chain_data.current_link_wait_factor);
+    chain_data.current_link_wait_factor = max(
+        submission.wait_factor() + 1,
+        chain_data.current_link_wait_factor,
+    );
 
     let ref mut chain = chain_data.chain;
     let chain_len = chain.links().len();

@@ -9,19 +9,20 @@
 //!
 
 mod family;
-mod submission;
 mod queue;
+mod submission;
 
 use fnv::FnvHashMap;
-use std::collections::hash_map::{Values as HashMapValues, ValuesMut as HashMapValuesMut,
-                                 IntoIter as HashMapIntoIter};
+use std::collections::hash_map::{
+    IntoIter as HashMapIntoIter, Values as HashMapValues, ValuesMut as HashMapValuesMut,
+};
 use std::ops::{Index, IndexMut};
 
 use hal::queue::QueueFamilyId;
 
 pub use self::family::Family;
-pub use self::submission::{Submission, SubmissionId};
 pub use self::queue::{Queue, QueueId, QueueIter, QueueIterMut};
+pub use self::submission::{Submission, SubmissionId};
 
 /// All schedule on which passes were scheduled.
 #[derive(Debug)]

@@ -1,3 +1,7 @@
+# Attention
+
+This project is discontinued in favor of [rendy](https://github.com/omni-viral/rendy).
+
 # gfx-chain
 
 This crates provides means for the users of low-level graphics API of `gfx-hal` to reason about what passes uses what resources and how those resources are accessed.
